@@ -1,0 +1,29 @@
+{
+  "name": "hnu-companion",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.mjs",
+    "./package.json": "./package.json",
+    "./guard": "./guard.mjs"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "manifestVersion": 1
+    }
+  }
+}

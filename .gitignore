@@ -1,0 +1,14 @@
+/.local/
+/dsh-superagent-prototype/
+/notice-hub/
+/NapCatQQ/
+node_modules/
+.venv/
+__pycache__/
+.DS_Store
+.env
+.env.*
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log

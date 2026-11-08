@@ -104,6 +104,11 @@
   .community-list { margin: .45rem 0 1rem; padding-inline-start: 1.35em; }
   .community-list li + li { margin-top: .7rem; }
   .github-link { color: var(--accent); text-underline-offset: 2px; }
+  .reference-section { width: min(100% - 2.5rem, 1100px); }
+  .reference-frame {
+    display: block; width: 100%; height: 42rem; margin-top: .75rem;
+    border: 1px solid var(--border); border-radius: 10px;
+  }
 
   @media (max-width: 480px) {
     .frame { width: calc(100% - 2rem); }
@@ -162,12 +167,427 @@
   <section class="section" id="community" aria-labelledby="community-title">
     <h2 id="community-title">未来展望：构建 HNU 插件社区</h2>
     <ol class="community-list">
-      <li>会写插件的同学可以把插件做出来、传上来，让其他同学下载使用。比如给学习通、雨课堂做个自动签到插件。hxd 把签到码发给你，你的 Agent 就能自己扫码。</li>
+      <li>会写插件的同学可以把插件做出来、传上来，让其他同学下载使用。比如给学习通、雨课堂做个自动签到插件。hxd 把签到码发给你，你都不用起床， Agent 就能自己扫码。</li>
       <li>QQ 群、CSDN 和各种论坛里散落着不少学习资料、历年试卷和操作指南。大家可以把这些资料传到共享的向量数据库，也可以把自己踩过的坑、摸索出来的操作步骤写成 Skill。以后遇到同样的问题，搜一下，像装插件一样装到本地。你可以自己翻，Agent 也能在帮你干活时查。</li>
       <li>欢迎任何同学给这个项目添砖加瓦！技术大牛也好，刚入门的小白也好，说说你能帮哪一块就行。愿意深入参与开发，我们欢迎。愿意拿出一点 Codex Plus 的额度帮忙跑开发任务，也欢迎。</li>
     </ol>
     <p>喜欢这个点子的话，欢迎<a class="github-link" href="https://github.com/Tivonsico/hnu-super-agent">去 GitHub 点个 Star</a>（正在构建中）。</p>
   </section>
 </main>
+<section class="frame section reference-section" aria-labelledby="reference-title">
+  <h2 id="reference-title">参考页面</h2>
+  <iframe class="reference-frame" id="dashboard-preview" title="消息大屏" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;title&gt;消息大屏 | hnu-super-agent&lt;/title&gt;
+&lt;style&gt;
+  :root {
+    color-scheme: light dark;
+    --background: #fff;
+    --sidebar: #f5f6f7;
+    --surface: #f9fafb;
+    --text: #0f1115;
+    --muted: #61666b;
+    --border: #0000001a;
+    --hover: #ebeef2;
+    --accent: #4176e6;
+    --selected: #e8efff;
+    --selected-text: #254da2;
+    --pending: #fef5e7;
+    --pending-text: #855011;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: #151517;
+      --sidebar: #232324;
+      --surface: #232324;
+      --text: #f9fafb;
+      --muted: #adb2b8;
+      --border: #ffffff1f;
+      --hover: #353638;
+      --accent: #7aaaff;
+      --selected: #253450;
+      --selected-text: #a8c7ff;
+      --pending: #422f17;
+      --pending-text: #ffca81;
+    }
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--text);
+    font: 14px/1.65 -apple-system, BlinkMacSystemFont, &quot;PingFang SC&quot;, &quot;Microsoft YaHei&quot;, sans-serif;
+  }
+  h1, h2, h3, p, dl, dd, blockquote { margin: 0; }
+  button { font: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    min-height: 100vh;
+  }
+  .sidebar {
+    padding: 20px 12px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 8px;
+    font-weight: 650;
+  }
+  .brand svg { flex: none; color: var(--accent); }
+  .courses { margin-top: 29px; }
+  .courses h2 { padding: 0 8px 7px; color: var(--muted); font-size: 12px; font-weight: 550; }
+  .course {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 36px;
+    border: 0;
+    border-radius: 7px;
+    padding: 6px 9px;
+    text-align: left;
+    color: var(--text);
+    background: transparent;
+    cursor: pointer;
+  }
+  .course + .course { margin-top: 3px; }
+  .course:hover { background: var(--hover); }
+  .course[aria-pressed=&quot;true&quot;] { background: var(--selected); color: var(--selected-text); font-weight: 600; }
+  .course-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  main {
+    width: min(100%, 1100px);
+    margin-inline: auto;
+    padding: clamp(22px, 4.5vw, 56px);
+  }
+  .page-title { font-size: 26px; line-height: 1.2; letter-spacing: -.035em; }
+  .list-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 23px 0 9px;
+  }
+  .list-heading h2 { font-size: 14px; font-weight: 650; }
+  .list-heading span { color: var(--muted); font-size: 12px; }
+
+  .ticket { border: 1px solid var(--border); border-radius: 12px; }
+  .ticket-header { padding: 18px 20px 14px; }
+  .ticket-title {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 7px 12px;
+  }
+  .ticket-title h3 { font-size: clamp(17px, 2vw, 21px); line-height: 1.45; letter-spacing: -.02em; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    background: var(--pending);
+    color: var(--pending-text);
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .status::before { content: &quot;&quot;; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 20px;
+    margin-top: 9px;
+    font-size: 12px;
+  }
+  .fields &gt; div { display: flex; flex-wrap: wrap; gap: 5px; }
+  .fields dt { color: var(--muted); }
+  .fields dd { font-weight: 550; }
+  .metadata {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0 10px;
+    margin-top: 9px;
+  }
+  .metadata .fields { margin-top: 0; }
+  .metadata .secondary-fields { grid-column: 1 / -1; margin-top: 7px; }
+  .groups &gt; summary, .metadata-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 5px;
+    margin: 0 -5px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    list-style: none;
+    cursor: pointer;
+  }
+  .groups &gt; summary:hover, .metadata-toggle:hover { background: var(--hover); }
+  .groups &gt; summary::after, .metadata-toggle::after {
+    content: &quot;&quot;;
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border: solid var(--muted);
+    border-width: 0 1.5px 1.5px 0;
+    transform: translateY(-1px) rotate(45deg);
+  }
+  .groups[open] &gt; summary::after, .metadata-toggle[aria-expanded=&quot;true&quot;]::after {
+    transform: translateY(1px) rotate(225deg);
+  }
+  .metadata-toggle { justify-content: center; width: 24px; height: 22px; margin: 0; }
+  .group-extra { margin-top: 3px; }
+
+  .ticket &gt; details { border-top: 1px solid var(--border); }
+  .ticket &gt; details &gt; summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 8px 20px;
+    cursor: pointer;
+    list-style: none;
+    font-weight: 600;
+  }
+  summary::-webkit-details-marker { display: none; }
+  .ticket &gt; details &gt; summary::before {
+    content: &quot;&quot;;
+    width: 7px;
+    height: 7px;
+    flex: none;
+    border: solid var(--muted);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(-45deg);
+    margin-right: 3px;
+  }
+  .ticket &gt; details[open] &gt; summary::before { transform: rotate(45deg); }
+  .ticket &gt; details &gt; summary:hover { background: var(--surface); }
+  .ticket &gt; details &gt; summary small { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .detail-body { padding: 4px 20px 16px 37px; }
+  .source-list, .timeline { list-style: none; padding: 0; margin: 0; }
+  .source-list li + li { margin-top: 9px; }
+  .message {
+    padding: 9px 12px;
+    background: var(--surface);
+    border-radius: 7px;
+    overflow-wrap: anywhere;
+  }
+  .byline { display: flex; flex-wrap: wrap; gap: 3px 10px; color: var(--muted); font-size: 12px; }
+  .byline strong { color: var(--text); font-weight: 600; }
+  .message blockquote { margin-top: 3px; }
+  .approval dt { margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .approval dd { margin: 1px 0 5px; }
+  .timeline li {
+    position: relative;
+    padding: 0 0 12px 15px;
+    border-left: 1px solid var(--border);
+  }
+  .timeline li:last-child { padding-bottom: 0; border-left-color: transparent; }
+  .timeline li::before {
+    content: &quot;&quot;;
+    position: absolute;
+    top: 7px;
+    left: -3px;
+    width: 5px;
+    height: 5px;
+    background: var(--muted);
+    border-radius: 50%;
+  }
+  .timeline li:last-child::before { background: var(--accent); }
+  .timeline p { margin-top: 1px; }
+  .empty { padding: 21px 0; border-top: 1px solid var(--border); color: var(--muted); }
+
+  @media (max-width: 680px) {
+    .shell { grid-template-columns: minmax(0, 1fr); }
+    .sidebar { padding: 12px; border-right: 0; border-bottom: 1px solid var(--border); }
+    .courses { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+    .courses h2 { width: 100%; padding-bottom: 0; }
+    .course { width: auto; min-height: 32px; }
+    .course + .course { margin-top: 0; }
+    main { padding: 20px 12px; }
+    .ticket-header { padding-inline: 12px; }
+    .ticket &gt; details &gt; summary { padding-inline: 12px; }
+    .detail-body { padding-inline: 25px 12px; }
+  }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div class=&quot;shell&quot;&gt;
+  &lt;aside class=&quot;sidebar&quot;&gt;
+    &lt;div class=&quot;brand&quot;&gt;
+      &lt;svg width=&quot;20&quot; height=&quot;20&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;1.6&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; aria-hidden=&quot;true&quot;&gt;
+        &lt;rect x=&quot;3&quot; y=&quot;4&quot; width=&quot;18&quot; height=&quot;16&quot; rx=&quot;4&quot;/&gt;
+        &lt;path d=&quot;M8 8.5v7m8-7v7m-8-3.5h8&quot;/&gt;
+      &lt;/svg&gt;
+      &lt;span&gt;hnu-super-agent&lt;/span&gt;
+    &lt;/div&gt;
+    &lt;nav class=&quot;courses&quot; aria-labelledby=&quot;courses-title&quot;&gt;
+      &lt;h2 id=&quot;courses-title&quot;&gt;课程&lt;/h2&gt;
+      &lt;button class=&quot;course&quot; type=&quot;button&quot; aria-pressed=&quot;true&quot; data-course=&quot;marx&quot;&gt;马克思主义原理&lt;span class=&quot;course-count&quot; aria-label=&quot;1 张工单&quot;&gt;1&lt;/span&gt;&lt;/button&gt;
+      &lt;button class=&quot;course&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot; data-course=&quot;os&quot;&gt;操作系统&lt;/button&gt;
+      &lt;button class=&quot;course&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot; data-course=&quot;network&quot;&gt;计算机网络&lt;/button&gt;
+      &lt;button class=&quot;course&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot; data-course=&quot;policy&quot;&gt;形势与政策&lt;/button&gt;
+      &lt;button class=&quot;course&quot; type=&quot;button&quot; aria-pressed=&quot;false&quot; data-course=&quot;history&quot;&gt;新中国史&lt;/button&gt;
+    &lt;/nav&gt;
+  &lt;/aside&gt;
+
+  &lt;main&gt;
+    &lt;h1 class=&quot;page-title&quot;&gt;消息大屏&lt;/h1&gt;
+    &lt;div class=&quot;list-heading&quot;&gt;
+      &lt;h2&gt;工单&lt;/h2&gt;&lt;span id=&quot;ticket-count&quot; aria-live=&quot;polite&quot;&gt;1 张&lt;/span&gt;
+    &lt;/div&gt;
+
+    &lt;article class=&quot;ticket&quot; id=&quot;marx-ticket&quot; aria-labelledby=&quot;ticket-title&quot;&gt;
+      &lt;header class=&quot;ticket-header&quot;&gt;
+        &lt;div class=&quot;ticket-title&quot;&gt;
+          &lt;h3 id=&quot;ticket-title&quot;&gt;完成比赛征文并提交&lt;/h3&gt;
+          &lt;span class=&quot;status&quot;&gt;待审核&lt;/span&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;metadata&quot;&gt;
+          &lt;dl class=&quot;fields&quot;&gt;
+            &lt;div&gt;&lt;dt&gt;课程&lt;/dt&gt;&lt;dd&gt;马克思主义原理&lt;/dd&gt;&lt;/div&gt;
+            &lt;div&gt;&lt;dt&gt;老师&lt;/dt&gt;&lt;dd&gt;胡老师&lt;/dd&gt;&lt;/div&gt;
+            &lt;div&gt;
+              &lt;dt&gt;群聊&lt;/dt&gt;
+              &lt;dd&gt;
+                &lt;details class=&quot;groups&quot;&gt;
+                  &lt;summary&gt;QQ · 马克思主义2026 信科院群&lt;/summary&gt;
+                  &lt;p class=&quot;group-extra&quot;&gt;计算机科学2x0x班级群&lt;/p&gt;
+                &lt;/details&gt;
+              &lt;/dd&gt;
+            &lt;/div&gt;
+          &lt;/dl&gt;
+          &lt;button class=&quot;metadata-toggle&quot; id=&quot;metadata-toggle&quot; type=&quot;button&quot; aria-label=&quot;教室及老师联系方式&quot; aria-expanded=&quot;false&quot; aria-controls=&quot;secondary-fields&quot;&gt;&lt;/button&gt;
+          &lt;dl class=&quot;fields secondary-fields&quot; id=&quot;secondary-fields&quot; hidden&gt;
+            &lt;div&gt;&lt;dt&gt;教室&lt;/dt&gt;&lt;dd&gt;综合楼101&lt;/dd&gt;&lt;/div&gt;
+            &lt;div&gt;&lt;dt&gt;老师联系方式&lt;/dt&gt;&lt;dd&gt;未填写&lt;/dd&gt;&lt;/div&gt;
+            &lt;div&gt;&lt;dt&gt;邮箱&lt;/dt&gt;&lt;dd&gt;未填写&lt;/dd&gt;&lt;/div&gt;
+          &lt;/dl&gt;
+        &lt;/div&gt;
+      &lt;/header&gt;
+
+      &lt;details&gt;
+        &lt;summary&gt;原始 QQ 记录 &lt;small&gt;3 条&lt;/small&gt;&lt;/summary&gt;
+        &lt;div class=&quot;detail-body&quot;&gt;
+          &lt;ol class=&quot;source-list&quot;&gt;
+            &lt;li class=&quot;message&quot;&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;胡老师&lt;/strong&gt;&lt;time datetime=&quot;2026-10-31T08:14:00+08:00&quot;&gt;10 月 31 日 08:14&lt;/time&gt;&lt;/div&gt;
+              &lt;blockquote&gt;大家参加一下这个征文比赛，具体要求见群文件。可以个人完成，也可以小组合作。写好后交给学委。&lt;/blockquote&gt;
+              &lt;p class=&quot;byline&quot;&gt;附件：比赛通知.pdf、征文要求.docx、征文模板.docx、评分说明.pdf&lt;/p&gt;
+            &lt;/li&gt;
+            &lt;li class=&quot;message&quot;&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;胡老师&lt;/strong&gt;&lt;time datetime=&quot;2026-11-02T16:20:00+08:00&quot;&gt;11 月 2 日 16:20&lt;/time&gt;&lt;/div&gt;
+              &lt;blockquote&gt;征文的格式要求更新了，大家用我刚发的这个模板。&lt;/blockquote&gt;
+              &lt;p class=&quot;byline&quot;&gt;附件：征文模板（更新版）.docx&lt;/p&gt;
+            &lt;/li&gt;
+            &lt;li class=&quot;message&quot;&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;学委&lt;/strong&gt;&lt;time datetime=&quot;2026-11-08T10:05:00+08:00&quot;&gt;11 月 8 日 10:05&lt;/time&gt;&lt;/div&gt;
+              &lt;blockquote&gt;征文收集表发群里了。填好姓名、班级、学号，记得把征文一起上传。&lt;/blockquote&gt;
+              &lt;p class=&quot;byline&quot;&gt;链接：腾讯文档 · 征文收集表&lt;/p&gt;
+            &lt;/li&gt;
+          &lt;/ol&gt;
+        &lt;/div&gt;
+      &lt;/details&gt;
+
+      &lt;details&gt;
+        &lt;summary&gt;审批详情&lt;/summary&gt;
+        &lt;div class=&quot;detail-body&quot;&gt;
+          &lt;dl class=&quot;approval&quot;&gt;
+            &lt;dt&gt;当前状态&lt;/dt&gt;&lt;dd&gt;待审核&lt;/dd&gt;
+            &lt;dt&gt;审核内容&lt;/dt&gt;&lt;dd&gt;比赛征文.docx（按更新版模板排版）&lt;/dd&gt;
+            &lt;dt&gt;提交信息&lt;/dt&gt;&lt;dd&gt;姓名、班级、学号已填入。征文已备好，等待你检查后提交。&lt;/dd&gt;
+          &lt;/dl&gt;
+        &lt;/div&gt;
+      &lt;/details&gt;
+
+      &lt;details open&gt;
+        &lt;summary&gt;工单会话&lt;/summary&gt;
+        &lt;div class=&quot;detail-body&quot;&gt;
+          &lt;ol class=&quot;timeline&quot;&gt;
+            &lt;li&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;Agent&lt;/strong&gt;&lt;time datetime=&quot;2026-10-31T08:16:00+08:00&quot;&gt;10 月 31 日 08:16&lt;/time&gt;&lt;/div&gt;
+              &lt;p&gt;已读完群里的 4 份文件。比赛只需要交一篇征文，我按你的偏好选了个人完成。&lt;/p&gt;
+            &lt;/li&gt;
+            &lt;li&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;Agent&lt;/strong&gt;&lt;time datetime=&quot;2026-11-02T16:22:00+08:00&quot;&gt;11 月 2 日 16:22&lt;/time&gt;&lt;/div&gt;
+              &lt;p&gt;胡老师发了新模板。我已把附件补进这张工单，并按新模板改好征文。&lt;/p&gt;
+            &lt;/li&gt;
+            &lt;li&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;你&lt;/strong&gt;&lt;time datetime=&quot;2026-11-02T16:40:00+08:00&quot;&gt;11 月 2 日 16:40&lt;/time&gt;&lt;/div&gt;
+              &lt;p&gt;稿子可以。帮我盯一下学委发的提交链接，找到后填好，最后我来交。&lt;/p&gt;
+            &lt;/li&gt;
+            &lt;li&gt;
+              &lt;div class=&quot;byline&quot;&gt;&lt;strong&gt;Agent&lt;/strong&gt;&lt;time datetime=&quot;2026-11-08T10:07:00+08:00&quot;&gt;11 月 8 日 10:07&lt;/time&gt;&lt;/div&gt;
+              &lt;p&gt;学委的链接已归到这张工单。姓名、班级、学号都填好了，等你审核征文和表单。&lt;/p&gt;
+            &lt;/li&gt;
+          &lt;/ol&gt;
+        &lt;/div&gt;
+      &lt;/details&gt;
+    &lt;/article&gt;
+
+    &lt;p class=&quot;empty&quot; id=&quot;empty&quot; aria-live=&quot;polite&quot; hidden&gt;&lt;/p&gt;
+  &lt;/main&gt;
+&lt;/div&gt;
+&lt;script&gt;
+  const courses = document.querySelector(&quot;.courses&quot;);
+  const buttons = [...courses.querySelectorAll(&quot;.course&quot;)];
+  const ticket = document.getElementById(&quot;marx-ticket&quot;);
+  const count = document.getElementById(&quot;ticket-count&quot;);
+  const empty = document.getElementById(&quot;empty&quot;);
+  const metadataToggle = document.getElementById(&quot;metadata-toggle&quot;);
+  const secondaryFields = document.getElementById(&quot;secondary-fields&quot;);
+
+  metadataToggle.addEventListener(&quot;click&quot;, () =&gt; {
+    const expand = secondaryFields.hidden;
+    secondaryFields.hidden = !expand;
+    metadataToggle.setAttribute(&quot;aria-expanded&quot;, String(expand));
+  });
+
+  courses.addEventListener(&quot;click&quot;, event =&gt; {
+    const selected = event.target.closest(&quot;.course&quot;);
+    if (!selected) return;
+    for (const button of buttons) {
+      button.setAttribute(&quot;aria-pressed&quot;, String(button === selected));
+    }
+    const hasTicket = selected.dataset.course === &quot;marx&quot;;
+    ticket.hidden = !hasTicket;
+    count.textContent = hasTicket ? &quot;1 张&quot; : &quot;0 张&quot;;
+    empty.hidden = hasTicket;
+    empty.textContent = hasTicket ? &quot;&quot; : selected.textContent.trim() + &quot;暂无工单&quot;;
+  });
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</section>
+<script>
+  const dashboardPreview = document.getElementById("dashboard-preview");
+  dashboardPreview.addEventListener("load", () => {
+    const dashboardShell = dashboardPreview.contentDocument?.querySelector(".shell");
+    if (!dashboardShell) return;
+    dashboardShell.style.minHeight = "0";
+    const fitDashboard = () => {
+      dashboardPreview.style.height = (Math.ceil(dashboardShell.getBoundingClientRect().height) + 2) + "px";
+    };
+    new ResizeObserver(fitDashboard).observe(dashboardShell);
+    fitDashboard();
+  });
+</script>
 </body>
 </html>

@@ -1,0 +1,7 @@
+{
+  "dsh": "0.2.2-rc.1",
+  "node": "24.21.0",
+  "dssa": { "directory": "dsh-superagent-prototype", "commit": "8c32a9dc5d72c033816c6a8110b37f40cf94fba4" },
+  "noticeHub": { "directory": "notice-hub", "commit": "f268cd2eb53f58e3352f692061e7458598bce58d" },
+  "napCatQQ": { "directory": "NapCatQQ", "commit": "98d781d19815d1625b24d717ce280ecf0a4f6d0c" }
+}
