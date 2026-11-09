@@ -473,7 +473,7 @@ window.__ModuleLoader__.load({
       const linked = ticketKey(event.ticket) || tickets.find(ticket => eventKey(ticket.evidence) === id || (ticket.evidence?.group_id === event.group_id && ticket.evidence?.message_id === event.message_id))?.id
       const reason = linked ? 'opened' : event.reason || event.status
       const group = groups.find(item => String(item.id) === String(event.group_id))
-      const allowed = group?.enabled && event.received_at >= group.enabledAt
+      const allowed = group?.enabled && (event.received_at >= group.enabledAt || group.historyEventIds?.includes(event.id))
         && (group.roles.includes(event.role) || group.senders.includes(event.actor))
       const selectable = !event.historyOnly && !linked && !event.proposal && reason !== 'open_rejected' && allowed
         && event.status !== 'conflict' && Boolean(event.message_id && event.sent_at && (event.text || event.attachments?.some(item => item.type === 'image')))
@@ -593,7 +593,7 @@ window.__ModuleLoader__.load({
     }
     function GroupForm({ group, save, show, compact = false }) {
       const isPrivate = group.id.startsWith('private:')
-      const [draft, set] = useState(() => ({ ...group, ttlMinutes: group.ttlMinutes ?? 30, roles: group.roles || ['owner', 'admin'],
+      const [draft, set] = useState(() => ({ ...group, ttlMinutes: group.ttlMinutes ?? 30, historyCount: group.historyCount ?? 20, roles: group.roles || ['owner', 'admin'],
         sendersText: (group.senders || []).map(sender => typeof sender === 'string' ? sender : sender.id).join('，') }))
       const [listen, setListen] = useState(null)
       const enabled = listen?.wasEnabled === group.enabled ? listen.enabled : group.enabled
@@ -601,7 +601,7 @@ window.__ModuleLoader__.load({
       return h('form', { className: 'hnu-card hnu-stack', onSubmit: async e => {
         e.preventDefault()
         await save('groups', { id: String(draft.id), name: draft.name, enabled, wasEnabled: group.enabled,
-          mode: draft.mode || 'observe', ttlMinutes: Number(draft.ttlMinutes), roles: draft.roles,
+          mode: draft.mode || 'observe', ttlMinutes: Number(draft.ttlMinutes), historyCount: Number(draft.historyCount), roles: draft.roles,
           senders: split(draft.sendersText), version: draft.version ?? 0 })
       } },
         !compact && h('div', { className: 'hnu-row hnu-between' },
@@ -612,6 +612,9 @@ window.__ModuleLoader__.load({
             onChange: e => setListen({ wasEnabled: group.enabled, enabled: e.target.checked }) }), isPrivate ? '监听此会话' : '监听此群'),
           h('label', null, '监听时长（分钟）', h('input', { type: 'number', min: 1, max: 1440, step: 1,
             required: true, value: draft.ttlMinutes, onChange: e => update('ttlMinutes', e.target.value) })),
+          h('label', null, '开启时回看消息（条）', h('input', { type: 'number', min: 0, max: 100, step: 1,
+            required: true, value: draft.historyCount, onChange: e => update('historyCount', e.target.value) })),
+          h('span', { className: 'hnu-muted' }, '每次开启时评估最近消息，0 表示只评估新消息；仍按发起权限判断并审核开单。'),
           group.enabled && h('span', { className: 'hnu-muted' }, timeOf(group.expiresAt) + ' 自动关闭 · 开单需人工审核'),
           !isPrivate && h('div', { className: 'hnu-row', 'aria-label': '默认允许的角色' }, ...['owner', 'admin'].map(role =>
             h('label', { key: role, className: 'hnu-check' }, h('input', { type: 'checkbox', checked: draft.roles.includes(role), onChange: e =>

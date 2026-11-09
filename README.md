@@ -6,7 +6,7 @@ HNU Super Agent 是一个运行在本机的 QQ 群事务台。打开 HNU Agent �
 NapCatQQ → OneBot 收件端 → HNU 会话监听与权限 → DSSA 评估 → 人工审核 → DSSA 工单 → DSH Worker
 ```
 
-NapCatQQ 负责读取 QQ。HNU 仅在会话监听期间将有发起权限的人发出的新消息送给 DSSA，DSSA 根据讨论判断是否有任务。用户批准开单后，DSSA 创建工单并派工，DSH 运行 Worker 会话。群务台（notice-hub）提供群收件和附件支持。
+NapCatQQ 负责读取 QQ。HNU 在开启会话监听时读取最近消息，并在监听期间将有发起权限的人发出的新消息送给 DSSA，DSSA 根据讨论判断是否有任务。用户批准开单后，DSSA 创建工单并派工，DSH 运行 Worker 会话。群务台（notice-hub）提供群收件和附件支持。
 
 ## 开发环境
 
@@ -47,7 +47,7 @@ HNU_DSSA_GITHUB_REPO=你的账号/你的开发仓库 node dsh/start.mjs
 
 macOS 用户先将 QQ 安装到 `/Applications/QQ.app`，在 HNU 的 QQ 连接页点击「安装并连接 QQ」。终端会下载并校验 NapCat Framework，备份入口，申请管理员授权并重启 QQ。随后在桌面 QQ 登录，HNU 自动检测当前账号并配置消息接入。QQ 更新导致接入失效时，可再次安装修复。启动接口变化的版本需要后续适配，当前实机验证版本为 QQ 7.0.3-54395。
 
-进入「会话设置」，设置发起权限并开启监听。监听默认 30 分钟，可以修改。到期后停止送评，已生成的开单建议仍可在「工单」审核。详见 [QQ 接入说明](docs/local-verification.md)。
+进入「会话设置」，设置发起权限并开启监听。监听默认 30 分钟，可以修改。每次开启时默认回看截至开启时最近 20 条消息，可在前端设为 0–100 条；0 表示只处理新消息。回看消息同样按发起权限送评，不会重复创建已有工单。读取历史失败时不会开启监听，会提示重试。到期后停止送评，已生成的开单建议仍可在「工单」审核。详见 [QQ 接入说明](docs/local-verification.md)。
 
 ## 代码放在哪里
 

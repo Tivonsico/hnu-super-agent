@@ -12,3 +12,4 @@ __pycache__/
 *.sqlite-shm
 *.sqlite-wal
 *.log
+/plugins/hnu-companion/node_modules

@@ -154,3 +154,42 @@ test('signed private messages create evidence only for an opted-in conversation'
   assert.deepEqual(queue.events().map(item => item.id), ['100:private:101:2', '100:private:101:4'])
   assert.deepEqual(queue.unsent(), [])
 })
+
+
+test('starting listening imports only the requested snapshot and resets it on the next start', t => {
+  let now = 1800000000000
+  t.mock.method(Date, 'now', () => now)
+  const queue = openQueue(':memory:')
+  t.after(() => queue.close())
+  queue.selectAccount('100')
+  const form = { id: '200', name: '群', version: 0, enabled: true, wasEnabled: false,
+    mode: 'observe', roles: ['owner'], senders: [], historyCount: 2 }
+  const message = (id, extra = {}) => ({ self_id: 100, message_type: 'group', group_id: 200,
+    user_id: 101, message_id: id, time: now / 1000 - 10,
+    sender: { user_id: 101, role: 'owner' }, message: [{ type: 'text', data: { text: '请写提纲' } }], ...extra })
+  const group = queue.saveGroup(form, [message(1), message(2), message(3), message(4, { group_id: 201 }),
+    message(5, { self_id: 900 }), message(6, { time: now / 1000 + 1 })], now)
+  assert.deepEqual(group.historyEventIds, ['100:200:2', '100:200:3'])
+  assert.deepEqual(queue.events().map(row => row.message_id), ['2', '3'])
+  assert.equal(queue.events()[0].role, 'owner')
+  const saved = queue.saveGroup({ ...group, wasEnabled: true }, [message(7)], now)
+  assert.deepEqual(saved.historyEventIds, group.historyEventIds)
+  now += 31 * 60_000
+  const next = queue.saveGroup({ ...saved, wasEnabled: false, historyCount: 0 }, [], now)
+  assert.deepEqual(next.historyEventIds, [])
+  assert.equal(next.historyCount, 0)
+  assert.throws(() => queue.saveGroup({ ...next, wasEnabled: true, historyCount: 101 }), { status: 400 })
+})
+
+test('private snapshot preserves incoming and own messages in the selected conversation', t => {
+  const queue = openQueue(':memory:')
+  t.after(() => queue.close())
+  queue.selectAccount('100')
+  const time = Math.floor(Date.now() / 1000) - 10
+  const messages = [101, 100].map((user_id, i) => ({ self_id: 100, user_id, message_id: i + 1,
+    post_type: user_id === 100 ? 'message_sent' : 'message', message_type: 'private', time,
+    message: [{ type: 'text', data: { text: '提纲要求' } }] }))
+  const group = queue.saveGroup({ id: 'private:101', name: '会话', version: 0, enabled: true,
+    wasEnabled: false, roles: [], senders: ['101'], historyCount: 20 }, messages)
+  assert.deepEqual(group.historyEventIds, ['100:private:101:1', '100:private:101:2'])
+})

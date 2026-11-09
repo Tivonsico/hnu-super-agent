@@ -353,6 +353,36 @@ async function history(config, account, { kind, id, before }) {
   return { messages, next: next === before ? null : next }
 }
 
+// Read a bounded snapshot only when the operator starts a listening period.
+export async function listenHistory(config, account, conversation, count, startedAt) {
+  if (await directAccount(config) !== account) throw Object.assign(new Error('QQ 账号已切换，请刷新会话设置'), { status: 409 })
+  const group = !conversation.startsWith('private:')
+  const id = group ? conversation : conversation.slice(8)
+  const rows = new Map()
+  let before
+  for (let pageNumber = 0; pageNumber < 6 && rows.size < count; pageNumber++) {
+    const page = await readOneBot(config, group ? 'get_group_msg_history' : 'get_friend_msg_history', {
+      [group ? 'group_id' : 'user_id']: id, count: 100,
+      ...(before ? { message_seq: before, reverse_order: true } : {}),
+      disable_get_url: true, parse_mult_msg: false, quick_reply: false,
+    }, 8000)
+    if (!Array.isArray(page?.messages)) throw new Error('QQ 消息格式无效，未开启监听，请重试')
+    const messages = page.messages.filter(message => historyId(message.message_id)
+      && safeId(message.self_id) === account && message.message_type === (group ? 'group' : 'private')
+      && (group ? safeId(message.group_id) === id : [id, account].includes(safeId(message.user_id)))
+      && Number.isSafeInteger(message.time) && message.time > 0)
+      .sort((a, b) => a.time - b.time)
+    for (const message of messages) {
+      if (message.time * 1000 <= startedAt) rows.set(String(message.message_id), message)
+    }
+    const next = messages[0]?.message_id
+    if (page.messages.length < 100 || !next || String(next) === String(before)) break
+    before = next
+  }
+  if (await directAccount(config) !== account) throw Object.assign(new Error('QQ 账号已切换，请刷新会话设置'), { status: 409 })
+  return [...rows.values()].sort((a, b) => a.time - b.time).slice(-count)
+}
+
 const safeImageTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 
 async function localImage(config, descriptor) {

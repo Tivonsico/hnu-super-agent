@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite'
 const maxBody = 128 * 1024
 export const defaultListenMinutes = 30
 export const maxListenMinutes = 1440
+export const defaultHistoryCount = 20
+export const maxHistoryCount = 100
 const positiveId = /^[1-9][0-9]{0,19}$/
 const messageId = /^-?[1-9][0-9]{0,19}$/
 const asId = (value, format = positiveId) =>
@@ -93,7 +95,7 @@ export function openQueue(path) {
     },
     groups: () => db.prepare('SELECT value FROM account_groups WHERE account = ? ORDER BY rowid').all(account() ?? '')
       .map(row => effectiveGroup(JSON.parse(row.value))),
-    saveGroup({ wasEnabled, ...input }) {
+    saveGroup({ wasEnabled, ...input }, history = [], startedAt = Date.now()) {
       db.exec('BEGIN IMMEDIATE')
       try {
         const currentAccount = account()
@@ -107,17 +109,45 @@ export function openQueue(path) {
         if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > maxListenMinutes) {
           throw Object.assign(new Error('监听时长必须为 1 至 1440 分钟'), { status: 400 })
         }
+        const historyCount = input.historyCount ?? previous?.historyCount ?? defaultHistoryCount
+        if (!Number.isInteger(historyCount) || historyCount < 0 || historyCount > maxHistoryCount) {
+          throw Object.assign(new Error('回看消息数量必须为 0 至 100 条'), { status: 400 })
+        }
+        const starting = input.enabled && !previous?.enabled
         const renewing = input.enabled && (!previous?.enabled || previous.ttlMinutes !== ttlMinutes)
         const value = {
           ...input,
           mode: input.enabled && !previous?.enabled ? 'observe' : input.mode,
           version: input.version + 1,
           enabledAt: input.enabled ? previous?.enabled ? previous.enabledAt : now : null,
-          ttlMinutes,
+          ttlMinutes, historyCount,
+          historyEventIds: starting ? [] : previous?.historyEventIds ?? [],
           expiresAt: input.enabled ? renewing ? now + ttlMinutes * 60_000 : previous.expiresAt : null,
         }
         db.prepare('INSERT INTO account_groups VALUES (?, ?, ?) ON CONFLICT(account, id) DO UPDATE SET value = excluded.value')
           .run(currentAccount, input.id, JSON.stringify(value))
+        if (starting && historyCount) {
+          const rows = history.flatMap(payload => {
+            // Own private history may omit target_id; the authenticated read selected the peer.
+            if (input.id.startsWith('private:') && String(payload.user_id) === currentAccount) {
+              payload = { ...payload, post_type: 'message_sent', target_id: input.id.slice(8) }
+            }
+            const raw = Buffer.from(JSON.stringify(payload))
+            const event = normalize(payload, raw, { dynamicGroups: true },
+              { account, group: loadGroup }, true)
+            return event && event.group === input.id && event.time * 1000 <= startedAt ? [{ event, raw }] : []
+          }).sort((a, b) => a.event.time - b.event.time)
+          const selected = [...new Map(rows.map(row => [row.event.id, row])).values()].slice(-historyCount)
+          for (const { event, raw } of selected) {
+            const fingerprint = digest(JSON.stringify([event.actor, event.time, event.segments]))
+            insert.run(event.id, event.group, event.message, event.actor, event.time, event.text, raw,
+              fingerprint, event.status, event.replyTo ?? null, event.name, event.role,
+              JSON.stringify(event.attachments), now, currentAccount)
+          }
+          value.historyEventIds = selected.map(row => row.event.id)
+          db.prepare('UPDATE account_groups SET value = ? WHERE account = ? AND id = ?')
+            .run(JSON.stringify(value), currentAccount, input.id)
+        }
         db.exec('COMMIT')
         return value
       } catch (error) {
@@ -167,7 +197,7 @@ function conversationId(payload) {
   return peer && 'private:' + peer
 }
 
-function normalize(payload, raw, options, queue) {
+function normalize(payload, raw, options, queue, history = false) {
   const self = asId(payload.self_id)
   const group = conversationId(payload)
   if (!self || self !== queue.account() || !group) return
@@ -175,11 +205,11 @@ function normalize(payload, raw, options, queue) {
   if (options.dynamicGroups ? !settings?.enabled : !options.groups.includes(group)) return
   const since = settings ? Math.floor(settings.enabledAt / 1000) : queue.health().enabled_since
   const actor = asId(payload.user_id)
-  const sentBySelf = payload.post_type === 'message_sent'
+  const sentBySelf = history ? actor === self : payload.post_type === 'message_sent'
   if (sentBySelf !== (actor === self)) return
   const time = Number.isSafeInteger(payload.time) && payload.time > 0 && payload.time <= Math.floor(Date.now() / 1000) + 120
     ? payload.time : undefined
-  if (time !== undefined && time < since) return
+  if (!history && time !== undefined && time < since) return
   const message = asId(payload.message_id, messageId)
   const segments = payload.message
   const text = Array.isArray(segments) ? segments

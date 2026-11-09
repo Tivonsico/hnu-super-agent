@@ -2,12 +2,12 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
-import { maxListenMinutes, openQueue } from '../../qq-ingest/receiver.mjs'
+import { maxListenMinutes, maxHistoryCount, defaultHistoryCount, openQueue } from '../../qq-ingest/receiver.mjs'
 import { openReviews } from '../../hnu/reviews.mjs'
 import { documentWork } from '../../hnu/document-work.mjs'
 import { bindExecution } from './execution.mjs'
 import { bindApprovals } from './approval.mjs'
-import { napcatRequest, qqImage } from './napcat.mjs'
+import { napcatRequest, qqImage, listenHistory } from './napcat.mjs'
 
 export const inject = ['orchestrator', 'webServer', 'connection', 'sessionController', 'credentials', 'workspaceRegistry']
 const sourceName = 'hnu-qq'
@@ -18,6 +18,7 @@ const groupInput = z.object({
   mode: z.enum(['observe', 'auto']), roles: z.array(z.enum(['owner', 'admin'])).max(2),
   senders: z.array(qqId).max(100),
   ttlMinutes: z.number().int().min(1).max(maxListenMinutes).optional(),
+  historyCount: z.number().int().min(0).max(maxHistoryCount).optional(),
   wasEnabled: z.boolean(),
   version: z.number().int().nonnegative(),
 })
@@ -96,8 +97,12 @@ function eligible(event, group) {
   return Boolean(group && event?.actor && (group.senders.includes(event.actor) || group.roles.includes(event.role)))
 }
 
-function assessable(event, group, previouslyAssessed = false) {
-  if (!previouslyAssessed && (!group?.enabled || event?.received_at < group.enabledAt)) return false
+function inListenWindow(event, group) {
+  return event && (event.received_at >= group.enabledAt || group.historyEventIds?.includes(event.id))
+}
+
+export function assessable(event, group, previouslyAssessed = false) {
+  if (!previouslyAssessed && (!group?.enabled || !inListenWindow(event, group))) return false
   return eligible(event, group) && event.status !== 'conflict' && Boolean(event.message_id && event.sent_at
     && (event.text || event.attachments?.some(item => item.type === 'image')))
 }
@@ -429,7 +434,14 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state, app
         if (path === 'groups') {
           if (queue.account() !== data.account) return respond(409, { error: 'QQ 账号已切换，请刷新群设置' })
           const input = groupInput.parse(data)
-          return respond(200, queue.saveGroup(input))
+          const account = queue.account()
+          const previous = queue.group(input.id)
+          const startedAt = Date.now()
+          const count = input.historyCount ?? previous?.historyCount ?? defaultHistoryCount
+          const history = input.enabled && !previous?.enabled && count
+            ? await listenHistory(config, account, input.id, count, startedAt) : []
+          if (account !== queue.account()) return respond(409, { error: 'QQ 账号已切换，请刷新会话设置' })
+          return respond(200, queue.saveGroup(input, history, startedAt))
         }
         if (path === 'approve-open') {
           const input = z.object({ eventId, version: z.string().min(1).max(120), action: z.enum(['approve', 'reject']) }).parse(data)
@@ -567,7 +579,7 @@ export function apply(ctx) {
         else if (event.status === 'conflict') reason = 'needs_confirmation'
         else if (proposal?.status === 'pending') reason = 'pending_open'
         else if (proposal?.status === 'reject') reason = 'open_rejected'
-        else if (!group?.enabled || event.received_at < group.enabledAt) reason = 'ordinary'
+        else if (!group?.enabled || !inListenWindow(event, group)) reason = 'ordinary'
         else if (!eligible(event, group)) reason = 'sender_not_allowed'
         else if (!assessable(event, group) || result?.kind === 'unavailable') reason = 'needs_confirmation'
         else if (result?.kind === 'ignore') reason = grant ? 'needs_confirmation' : 'ordinary'
