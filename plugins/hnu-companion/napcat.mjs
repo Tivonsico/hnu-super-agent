@@ -26,6 +26,7 @@ const routes = new Map([
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 const fail = (status, error, fields = {}) => ({ status, value: { ok: false, error, ...fields } })
 const ok = value => ({ status: 200, value: { ok: true, ...value } })
+const duplicateLoginHelp = '当前启动的是独立 NapCat，与桌面 QQ 同号登录冲突。共用登录需要从兼容的桌面接入入口启动 QQ。'
 
 function localUrl(value) {
   if (typeof value !== 'string' || !value) return
@@ -142,7 +143,7 @@ async function webUiStatus(settings) {
         : duplicateLogin ? 'duplicate_login'
           : status?.qrLoginAccepted || status?.loginPhase === 'qrcode_scanned' ? 'waiting_login' : 'waiting_qr'
     return { online, stage, napcat_installed: true, napcat_running: true,
-      error: duplicateLogin && !online ? '这个 QQ 已在桌面客户端登录。请先退出原来的桌面 QQ，保留 NapCat 窗口，再点「换一个二维码」。' : undefined,
+      error: duplicateLogin && !online ? duplicateLoginHelp : undefined,
       user_id: /^[1-9][0-9]*$/.test(String(account?.uin)) ? String(account.uin) : undefined,
       nickname: typeof account?.nick === 'string' ? account.nick.slice(0, 120) : undefined,
       login_url: settings.url.href }
@@ -199,11 +200,31 @@ function readConfig(config) {
 async function readOneBot(config, action, body = {}, timeout = 2200) {
   const connection = readConfig(config)
   if (!connection || !readActions.has(action)) throw new Error('NapCat 读取接口未配置')
-  const response = await fetch(new URL('/' + action, connection.base), {
-    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeout),
-    headers: { Authorization: 'Bearer ' + connection.token, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  let response
+  try {
+    response = await fetch(new URL('/' + action, connection.base), {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeout),
+      headers: { Authorization: 'Bearer ' + connection.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    if (error.name === 'TimeoutError') throw new Error('QQ 读取连接超时，请刷新会话')
+    if (error.cause?.code === 'ECONNREFUSED') {
+      const settings = await webUiSettings(config)
+      if (settings.installed && settings.originalEntry) {
+        throw new Error('QQ 当前使用原版入口。请在 NapCat 安装器中切换入口并启动 NapCat。')
+      }
+      const status = await webUiStatus(settings)
+      if (status?.error) throw new Error(status.error)
+      if (status?.online) throw new Error('QQ 已登录，请在 QQ 连接设置点击「接入群消息」')
+      if (status) throw new Error('请在 QQ 连接设置完成 NapCat 登录')
+      throw new Error('QQ 读取连接未启动，请检查 NapCat')
+    }
+    throw new Error('暂时无法连接 QQ 读取接口，请刷新会话')
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error('QQ 读取授权已失效，请在权限设置中重新接入群消息')
+  }
   if (!response.ok) throw new Error('NapCat 读取接口暂不可用')
   const payload = JSON.parse((await readBytes(response, action === 'get_group_member_list' ? 8 * 1024 * 1024 : undefined)).toString('utf8'))
   if (payload.retcode !== 0 || payload.status !== 'ok') {
@@ -578,7 +599,7 @@ export async function napcatRequest(config, path, method = 'GET', query = {}) {
         if (image) return image
         return fail(503, '暂时无法生成新二维码，请在 NapCat 登录窗口刷新。')
       }
-      if (status?.loginError?.includes('无法重复登录')) return fail(404, '请先退出原来的桌面 QQ')
+      if (status?.loginError?.includes('无法重复登录')) return fail(404, duplicateLoginHelp)
       const image = renderQr(status?.qrcodeurl, file?.createdAt ?? Date.now())
       if (image) return image
       return fail(404, '请点「换一个二维码」重新扫码')

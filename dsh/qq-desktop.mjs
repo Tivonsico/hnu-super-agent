@@ -23,7 +23,9 @@ const archive = existsSync(verifiedArchive) ? verifiedArchive : join(downloads, 
 const frameworkDigest = '118d66bb4849b7fcec05a4cafc9e33ed44f9236d56661f7097aba2ab3081df2e'
 const napcatDigest = '19ba6bc8ec3a1a7c705c0d3b7e16c08e09ab9bf17ef5b3639b9ed2fef15cdfa0'
 const marker = '// HNU Agent desktop Framework'
-const backup = join(downloads, 'original-loader.js')
+const qqVersion = JSON.parse(readFileSync(join(resources, 'package.json'), 'utf8')).version
+const backup = join(downloads, 'original-loader-' + qqVersion + '.js')
+const legacyBackup = join(downloads, 'original-loader.js')
 const prepared = join(downloads, 'desktop-loader.js')
 const currentLoader = () => existsSync(loader) ? readFileSync(loader, 'utf8') : ''
 
@@ -53,8 +55,8 @@ function prepareLayout() {
 
 function prepare() {
   const spec = JSON.parse(readFileSync(join(resources, 'package.json'), 'utf8'))
-  if (spec.version !== '7.0.2-53644' || spec.main !== './loadNapCat.js') {
-    throw new Error('这套桌面接入需要本机安装器配置的 QQ 7.0.2-53644')
+  if (!['7.0.2-53644', '7.0.3-54395'].includes(spec.version) || spec.main !== './loadNapCat.js') {
+    throw new Error('请先用 NapCat 安装器配置 QQ 7.0.2-53644 或 7.0.3-54395 的启动入口')
   }
   if (!existsSync(archive) || createHash('sha256').update(readFileSync(archive)).digest('hex') !== frameworkDigest) {
     throw new Error('NapCat Framework 发行包未下载完成或校验失败')
@@ -109,7 +111,8 @@ function qqProcesses() {
 
 if (process.argv.includes('--restore')) {
   const current = currentLoader()
-  if ((!current || current.startsWith(marker)) && existsSync(backup)) install(backup)
+  const saved = existsSync(backup) ? backup : qqVersion === '7.0.2-53644' ? legacyBackup : undefined
+  if ((!current || current.startsWith(marker)) && saved && existsSync(saved)) install(saved)
   console.log('已恢复此前的 QQ 启动入口。')
 } else {
   prepare()
