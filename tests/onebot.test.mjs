@@ -193,3 +193,49 @@ test('private snapshot preserves incoming and own messages in the selected conve
     wasEnabled: false, roles: [], senders: ['101'], historyCount: 20 }, messages)
   assert.deepEqual(group.historyEventIds, ['100:private:101:1', '100:private:101:2'])
 })
+
+test('history refresh preserves existing signed evidence despite media URL differences', t => {
+  const queue = openQueue(':memory:')
+  t.after(() => queue.close())
+  queue.selectAccount('100')
+  const time = Math.floor(Date.now() / 1000) - 10
+  const event = { id: '100:200:1', group: '200', message: '1', actor: '101', time,
+    segments: [{ type: 'image', data: { url: 'https://example.invalid/image' } }],
+    text: '', status: 'needs_confirmation', name: '成员', role: 'owner', attachments: [{ type: 'image', name: '' }] }
+  queue.save(event, Buffer.from('{}'), '100')
+  queue.saveGroup({ id: '200', name: '会话', version: 0, enabled: true, wasEnabled: false,
+    roles: ['owner'], senders: [], historyCount: 20 }, [{ self_id: 100, user_id: 101,
+    group_id: 200, message_type: 'group', message_id: 1, time,
+    message: [{ type: 'image', data: { url: '/local/file' } }] }])
+  assert.equal(queue.get(event.id).status, 'needs_confirmation')
+  assert.equal(queue.get(event.id).role, 'owner')
+})
+
+test('reports arriving while the opening snapshot loads are buffered until settings commit', async t => {
+  let now = Date.now()
+  t.mock.method(Date, 'now', () => now)
+  const dir = mkdtempSync(join(tmpdir(), 'hnu-opening-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const queue = openQueue(join(dir, 'queue.sqlite'))
+  const collector = openQueue(join(dir, 'queue.sqlite'))
+  queue.selectAccount('100')
+  const form = { id: '200', name: '群', enabled: true, wasEnabled: false, version: 0,
+    roles: ['owner'], senders: [], historyCount: 20 }
+  const server = receiver(collector, { token: 'test', dynamicGroups: true }).listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); collector.close(); queue.close() })
+  const startedAt = now
+  queue.beginListening(form, startedAt)
+  assert.equal(queue.group('200')?.enabled ?? false, false)
+  now += 1000
+  const body = JSON.stringify({ self_id: 100, message_type: 'group', group_id: 200,
+    post_type: 'message', user_id: 101, message_id: 1, time: Math.floor(now / 1000),
+    sender: { user_id: 101, role: 'owner' }, message: [{ type: 'text', data: { text: '开始后的新任务' } }] })
+  await fetch(`http://127.0.0.1:${server.address().port}/onebot/event`, { method: 'POST', body,
+    headers: { 'X-Signature': 'sha1=' + createHmac('sha1', 'test').update(body).digest('hex') } })
+  assert.equal(queue.events().length, 1)
+  const settings = queue.saveGroup(form, [], startedAt)
+  queue.endListening('100', '200', startedAt)
+  assert.equal(settings.enabledAt, startedAt)
+  assert.equal(queue.events()[0].received_at >= settings.enabledAt, true)
+})

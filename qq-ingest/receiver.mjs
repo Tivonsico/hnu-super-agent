@@ -36,6 +36,10 @@ export function openQueue(path) {
     CREATE TABLE IF NOT EXISTS account_groups (
       account TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(account, id)
     );
+    CREATE TABLE IF NOT EXISTS listening_starts (
+      account TEXT NOT NULL, id TEXT NOT NULL, started_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(account, id)
+    );
     CREATE TABLE IF NOT EXISTS conversation_activity (
       account TEXT NOT NULL, id TEXT NOT NULL, active_at INTEGER NOT NULL, PRIMARY KEY(account, id)
     );
@@ -81,6 +85,30 @@ export function openQueue(path) {
   return {
     close: () => db.close(),
     group: loadGroup,
+    beginListening(input, startedAt) {
+      const self = account()
+      const previous = loadGroup(input.id, self)
+      if (!self || (previous?.version ?? 0) !== input.version || Boolean(previous?.enabled) !== input.wasEnabled) {
+        throw Object.assign(new Error('会话设置已更新，请刷新'), { status: 409 })
+      }
+      const expiresAt = startedAt + 60_000
+      const result = db.prepare(`INSERT INTO listening_starts VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(account, id) DO UPDATE SET started_at = excluded.started_at,
+          expires_at = excluded.expires_at, value = excluded.value WHERE listening_starts.expires_at <= ?`)
+        .run(self, input.id, startedAt, expiresAt,
+          JSON.stringify({ ...input, enabled: true, enabledAt: startedAt, expiresAt }), startedAt)
+      if (!result.changes) throw Object.assign(new Error('正在开启此会话监听，请稍候'), { status: 409 })
+    },
+    endListening(self, id, startedAt) {
+      db.prepare('DELETE FROM listening_starts WHERE account = ? AND id = ? AND started_at = ?').run(self, id, startedAt)
+    },
+    collectionGroup(id, self) {
+      const group = loadGroup(id, self)
+      if (group?.enabled) return group
+      const pending = db.prepare('SELECT value FROM listening_starts WHERE account = ? AND id = ? AND expires_at > ?')
+        .get(self, id, Date.now())
+      return pending ? JSON.parse(pending.value) : group
+    },
     activity: () => Object.fromEntries(db.prepare('SELECT id, active_at FROM conversation_activity WHERE account = ?')
       .all(account() ?? '').map(row => [row.id, row.active_at])),
     recordActivity(self, id, at) {
@@ -119,7 +147,7 @@ export function openQueue(path) {
           ...input,
           mode: input.enabled && !previous?.enabled ? 'observe' : input.mode,
           version: input.version + 1,
-          enabledAt: input.enabled ? previous?.enabled ? previous.enabledAt : now : null,
+          enabledAt: input.enabled ? previous?.enabled ? previous.enabledAt : startedAt : null,
           ttlMinutes, historyCount,
           historyEventIds: starting ? [] : previous?.historyEventIds ?? [],
           expiresAt: input.enabled ? renewing ? now + ttlMinutes * 60_000 : previous.expiresAt : null,
@@ -139,6 +167,7 @@ export function openQueue(path) {
           }).sort((a, b) => a.event.time - b.event.time)
           const selected = [...new Map(rows.map(row => [row.event.id, row])).values()].slice(-historyCount)
           for (const { event, raw } of selected) {
+            if (select.get(event.id)) continue // History URLs may differ from signed reports; preserve original evidence.
             const fingerprint = digest(JSON.stringify([event.actor, event.time, event.segments]))
             insert.run(event.id, event.group, event.message, event.actor, event.time, event.text, raw,
               fingerprint, event.status, event.replyTo ?? null, event.name, event.role,
@@ -201,7 +230,7 @@ function normalize(payload, raw, options, queue, history = false) {
   const self = asId(payload.self_id)
   const group = conversationId(payload)
   if (!self || self !== queue.account() || !group) return
-  const settings = options.dynamicGroups ? queue.group(group, self) : undefined
+  const settings = options.dynamicGroups ? (queue.collectionGroup?.(group, self) ?? queue.group(group, self)) : undefined
   if (options.dynamicGroups ? !settings?.enabled : !options.groups.includes(group)) return
   const since = settings ? Math.floor(settings.enabledAt / 1000) : queue.health().enabled_since
   const actor = asId(payload.user_id)

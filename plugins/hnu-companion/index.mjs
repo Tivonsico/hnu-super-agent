@@ -438,10 +438,15 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state, app
           const previous = queue.group(input.id)
           const startedAt = Date.now()
           const count = input.historyCount ?? previous?.historyCount ?? defaultHistoryCount
-          const history = input.enabled && !previous?.enabled && count
-            ? await listenHistory(config, account, input.id, count, startedAt) : []
-          if (account !== queue.account()) return respond(409, { error: 'QQ 账号已切换，请刷新会话设置' })
-          return respond(200, queue.saveGroup(input, history, startedAt))
+          const opening = input.enabled && !previous?.enabled && count > 0
+          if (opening) queue.beginListening(input, startedAt)
+          try {
+            const history = opening ? await listenHistory(config, account, input.id, count, startedAt) : []
+            if (account !== queue.account()) return respond(409, { error: 'QQ 账号已切换，请刷新会话设置' })
+            return respond(200, queue.saveGroup(input, history, startedAt))
+          } finally {
+            if (opening) queue.endListening(account, input.id, startedAt)
+          }
         }
         if (path === 'approve-open') {
           const input = z.object({ eventId, version: z.string().min(1).max(120), action: z.enum(['approve', 'reject']) }).parse(data)
