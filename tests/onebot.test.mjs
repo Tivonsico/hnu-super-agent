@@ -239,3 +239,21 @@ test('reports arriving while the opening snapshot loads are buffered until setti
   assert.equal(settings.enabledAt, startedAt)
   assert.equal(queue.events()[0].received_at >= settings.enabledAt, true)
 })
+
+test('a delayed signed report reconciles history media URLs but still rejects changed content', t => {
+  const queue = openQueue(':memory:')
+  t.after(() => queue.close())
+  queue.selectAccount('100')
+  const time = Math.floor(Date.now() / 1000)
+  const payload = { self_id: 100, user_id: 101, message_id: 1, group_id: 200, message_type: 'group', time,
+    message: [{ type: 'image', data: { file: 'image.png', url: '/local/file' } }] }
+  queue.saveGroup({ id: '200', name: '群', enabled: true, wasEnabled: false, version: 0,
+    roles: [], senders: ['101'] }, [payload])
+  const event = { id: '100:200:1', group: '200', message: '1', actor: '101', time,
+    segments: [{ type: 'image', data: { file: 'image.png', url: 'https://example.invalid/image' } }],
+    status: 'needs_confirmation', text: '', name: '成员', role: null, attachments: [{ type: 'image', name: 'image.png' }] }
+  queue.save(event, Buffer.from(JSON.stringify({ ...payload, message: event.segments })), '100')
+  assert.equal(queue.get(event.id).status, 'needs_confirmation')
+  queue.save({ ...event, actor: '999' }, Buffer.from('{}'), '100')
+  assert.equal(queue.get(event.id).status, 'conflict')
+})

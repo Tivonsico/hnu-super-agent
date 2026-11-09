@@ -13,6 +13,11 @@ const asId = (value, format = positiveId) =>
   (typeof value === 'string' || Number.isSafeInteger(value)) && format.test(String(value)) ? String(value) : undefined
 const signatureOf = (token, body) => 'sha1=' + createHmac('sha1', token).update(body).digest('hex')
 const digest = body => createHash('sha256').update(body).digest('hex')
+const historyContent = (actor, time, segments) => JSON.stringify([actor, time, segments?.map(segment => {
+  if (!['image', 'file', 'record', 'video'].includes(segment.type) || !segment.data?.file) return segment
+  const { url, ...data } = segment.data
+  return { ...segment, data }
+})])
 
 function effectiveGroup(value, now = Date.now()) {
   const ttlMinutes = value.ttlMinutes ?? defaultListenMinutes
@@ -64,6 +69,7 @@ export function openQueue(path) {
     addColumn('events', 'role', 'TEXT')
     addColumn('events', 'attachments', "TEXT NOT NULL DEFAULT '[]'")
     addColumn('events', 'received_at', 'INTEGER')
+    addColumn('events', 'history_origin', 'INTEGER NOT NULL DEFAULT 0')
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
@@ -172,6 +178,7 @@ export function openQueue(path) {
             insert.run(event.id, event.group, event.message, event.actor, event.time, event.text, raw,
               fingerprint, event.status, event.replyTo ?? null, event.name, event.role,
               JSON.stringify(event.attachments), now, currentAccount)
+            db.prepare('UPDATE events SET history_origin = 1 WHERE id = ?').run(event.id)
           }
           value.historyEventIds = selected.map(row => row.event.id)
           db.prepare('UPDATE account_groups SET value = ? WHERE account = ? AND id = ?')
@@ -195,6 +202,15 @@ export function openQueue(path) {
       .run(online, self),
     save(event, raw, self) {
       const fingerprint = digest(JSON.stringify([event.actor, event.time, event.segments]))
+      const previous = select.get(event.id)
+      if (previous?.history_origin && previous.status !== 'conflict' && self === account()) {
+        const payload = JSON.parse(Buffer.from(previous.raw))
+        if (historyContent(previous.actor, previous.sent_at, payload.message)
+          === historyContent(event.actor, event.time, event.segments)) {
+          db.prepare('UPDATE events SET fingerprint = ?, raw = ?, history_origin = 0 WHERE id = ?')
+            .run(fingerprint, raw, event.id)
+        }
+      }
       insert.run(event.id, event.group, event.message ?? null, event.actor ?? null, event.time ?? null,
         event.text, raw, fingerprint, event.status, event.replyTo ?? null, event.name, event.role,
         JSON.stringify(event.attachments), Date.now(), self)
