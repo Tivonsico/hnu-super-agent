@@ -2,9 +2,9 @@ import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { open, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const installer = 'https://github.com/NapNeko/NapCat-Mac-Installer/releases/download/v1.8/NapCatInstaller_v1.8_universal.zip'
 const qqData = join(homedir(), 'Library/Containers/com.tencent.qq/Data')
 const macInstall = join(qqData, 'Documents/napcat')
 const macRuntime = join(qqData, 'Library/Application Support/QQ/NapCat')
@@ -16,6 +16,7 @@ const routes = new Map([
   ['history', 'GET'],
   ['permissions', 'GET'],
   ['start', 'POST'],
+  ['install', 'POST'],
   ['qrcode', 'GET'],
   ['refresh-qrcode', 'POST'],
   ['webui', 'GET'],
@@ -84,23 +85,34 @@ async function request(config, path, method = 'GET') {
 const readJson = path => readFile(path, 'utf8').then(JSON.parse).catch(() => undefined)
 
 async function webUiSettings(config) {
-  let file, installed, originalEntry
+  let file, installed, originalEntry, desktopEntry, qqVersion, installing
   if (process.platform === 'darwin') {
-    const [runtimeConfig, legacyConfig, entry, qq] = await Promise.all([
+    const [runtimeConfig, legacyConfig, entry, qq, loader] = await Promise.all([
       readJson(join(macRuntime, 'config/webui.json')),
       readJson(join(macInstall, 'config/webui.json')),
       stat(join(macInstall, 'napcat.mjs')).catch(() => undefined),
       readJson(qqPackage),
+      readFile(join(qqPackage, '../loadNapCat.js'), 'utf8').catch(() => ''),
     ])
     file = runtimeConfig ?? legacyConfig
     installed = Boolean(entry?.isFile() || file)
+    desktopEntry = qq?.main === './loadNapCat.js' && loader.startsWith('// HNU Agent desktop Framework')
+    qqVersion = qq?.version
+    const lock = await stat(join(qqData, 'Documents/.hnu-desktop-install.lock')).catch(() => undefined)
+    installing = Boolean(lock && Date.now() - lock.mtimeMs < 30 * 60_000)
     originalEntry = ['./application.asar/app_launcher/index.js', './application/app_launcher/index.js',
       './app_launcher/index.js'].includes(qq?.main)
   }
   const configuredUrl = localUrl(config.napcatLoginUrl)
   const url = configuredUrl ?? new URL(`http://127.0.0.1:${Number.isInteger(file?.port) && file.port > 0 ? file.port : 6099}/webui/`)
   const token = config.napcatWebUiToken ?? configuredUrl?.searchParams.get('token') ?? file?.token
-  return { url: new URL('/webui/', url), token, installed, originalEntry }
+  return { url: new URL('/webui/', url), token, installed, originalEntry, desktopEntry, qqVersion, installing }
+}
+
+function qqProcesses() {
+  const binary = '/Applications/QQ.app/Contents/MacOS/QQ'
+  const rows = execFileSync('/bin/ps', ['-axo', 'command='], { encoding: 'utf8' }).split('\n').map(line => line.trim())
+  return rows.filter(line => line === binary || line.startsWith(binary + ' '))
 }
 
 const sessions = new Map()
@@ -212,7 +224,7 @@ async function readOneBot(config, action, body = {}, timeout = 2200) {
     if (error.cause?.code === 'ECONNREFUSED') {
       const settings = await webUiSettings(config)
       if (settings.installed && settings.originalEntry) {
-        throw new Error('QQ 当前使用原版入口。请在 NapCat 安装器中切换入口并启动 NapCat。')
+        throw new Error('桌面 QQ 接入未安装，请点击「安装并连接 QQ」')
       }
       const status = await webUiStatus(settings)
       if (status?.error) throw new Error(status.error)
@@ -512,36 +524,36 @@ async function configureReadOnly(settings, config) {
 }
 
 let startingQQ = false
-async function startQQ(settings, mode) {
-  if (process.platform !== 'darwin' || !['agent', 'desktop'].includes(mode)) return fail(400, '请选择 QQ 登录方式')
+async function startQQ(settings) {
+  if (process.platform !== 'darwin') return fail(400, '桌面 QQ 接入适用于 macOS')
+  if (!settings.desktopEntry) return fail(409, '请先点击「安装并连接 QQ」完成桌面接入', { stage: 'needs_install' })
+  if (qqProcesses().some(line => line.split(' ').includes('--no-sandbox'))) {
+    return fail(409, '检测到独立 NapCat，请点击「安装并连接 QQ」修复共用登录', { stage: 'needs_install' })
+  }
   const online = await webUiStatus(settings)
   if (online?.online) return ok(online)
   if (startingQQ) return ok({ stage: 'starting' })
   startingQQ = true
   try {
-    const binary = '/Applications/QQ.app/Contents/MacOS/QQ'
-    const processes = execFileSync('/bin/ps', ['-axo', 'command='], { encoding: 'utf8' }).split('\n').map(line => line.trim())
-    const running = processes.find(line => line === binary || line.startsWith(binary + ' '))
-    if (running) return fail(409, 'QQ 已在运行。请在现有窗口登录，或退出后再选择另一种登录方式。')
-    const loader = await readFile(join(qqPackage, '../loadNapCat.js'), 'utf8').catch(() => '')
-    if (!settings.installed || settings.originalEntry || !loader) {
-      return fail(409, '请在 NapCat 安装器中切换程序入口，再回到这里刷新。', { install_url: installer })
-    }
-    if (mode === 'desktop' && !loader.startsWith('// HNU Agent desktop Framework')) {
-      return fail(409, '请先运行项目里的「启动桌面 QQ.command」完成桌面接入。')
-    }
-    const child = spawn(mode === 'desktop' ? '/usr/bin/open' : binary,
-      mode === 'desktop' ? ['-a', '/Applications/QQ.app'] : ['--no-sandbox'],
-      { detached: true, stdio: 'ignore' })
+    if (qqProcesses().length) return ok({ stage: 'waiting_qr', instruction: '请在桌面 QQ 完成登录，Agent 将自动检测账号。' })
+    const child = spawn('/usr/bin/open', ['-a', '/Applications/QQ.app'], { detached: true, stdio: 'ignore' })
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
     child.unref()
-    return ok({ stage: 'starting', instruction: 'QQ 正在启动，二维码将在这里显示。' })
+    return ok({ stage: 'starting', instruction: '桌面 QQ 正在启动，请扫码登录。' })
   } finally { startingQQ = false }
 }
 
 export async function napcatRequest(config, path, method = 'GET', query = {}) {
   if (!routes.has(path)) return fail(404, '未知的 NapCat 操作')
   if (routes.get(path) !== method) return fail(405, '此 NapCat 操作不支持该请求方法')
+  const settings = await webUiSettings(config)
+  if (process.platform === 'darwin' && path !== 'install'
+    && (!settings.desktopEntry || qqProcesses().some(line => line.split(' ').includes('--no-sandbox')))) {
+    const detail = { online: false, stage: 'needs_install', qq_version: settings.qqVersion, napcat_installed: settings.installed }
+    const message = '请安装桌面 QQ 共用登录接入。安装完成后，Agent 会自动识别桌面 QQ 账号。'
+    if (path === 'status' && settings.installing) return ok({ ...detail, stage: 'installing' })
+    return path === 'status' ? ok({ ...detail, error: message }) : fail(409, message, detail)
+  }
   if (path === 'conversations' || path === 'history' || path === 'permissions') {
     const { account, kind, id, before, policy } = query
     if (!safeId(account)) return fail(409, '请先在权限设置连接 QQ')
@@ -559,9 +571,18 @@ export async function napcatRequest(config, path, method = 'GET', query = {}) {
       return fail(503, error.message)
     }
   }
-  const settings = await webUiSettings(config)
   const hub = (route, verb) => request(config, route, verb).catch(() => undefined)
-  if (path === 'start') return startQQ(settings, query.mode)
+  if (path === 'install') {
+    if (process.platform !== 'darwin') return fail(400, '桌面 QQ 接入适用于 macOS')
+    if (!settings.qqVersion) return fail(409, '请先将 QQ 安装到 /Applications/QQ.app')
+    if (settings.installing) return ok({ stage: 'installing', instruction: '安装正在进行，请在已打开的终端完成授权。' })
+    const command = join(dirname(dirname(dirname(fileURLToPath(import.meta.url)))), '启动桌面 QQ.command')
+    try {
+      await new Promise((resolve, reject) => execFile('/usr/bin/open', ['-a', 'Terminal', command], error => error ? reject(error) : resolve()))
+      return ok({ stage: 'installing', instruction: '请在终端完成安装和 macOS 授权。安装后会重启 QQ，Agent 将自动检测登录。' })
+    } catch { return fail(503, '无法打开安装步骤，请双击项目里的「启动桌面 QQ.command」') }
+  }
+  if (path === 'start') return startQQ(settings)
   if (path === 'setup') return configureReadOnly(settings, config)
   if (path === 'groups') {
     try {
@@ -622,7 +643,7 @@ export async function napcatRequest(config, path, method = 'GET', query = {}) {
     hub('status'), webUiStatus(settings), directStatus(config).catch(() => undefined),
   ])
   const fromHub = hubStatus?.value
-  const status = native ?? direct ?? (fromHub?.stage ? publicStatus(fromHub) : undefined)
+  const status = native ?? direct ?? (process.platform !== 'darwin' && fromHub?.stage ? publicStatus(fromHub) : undefined)
   const canOpenWebUi = Boolean(native || await verifyWebUi(settings))
   const loginUrl = canOpenWebUi ? settings.url.href : undefined
   if (path === 'switch') {
@@ -633,8 +654,7 @@ export async function napcatRequest(config, path, method = 'GET', query = {}) {
     }
     if (loginUrl) return ok({ ...status, stage: 'switch_in_webui', login_url: loginUrl,
       instruction: '在 NapCat 切换账号后，回到这里点击「使用此 QQ」。' })
-    return fail(409, '请先启动 NapCat，再在 QQ 登录窗口切换账号',
-      { stage: status?.stage, install_url: process.platform === 'darwin' ? installer : undefined })
+    return fail(409, '请先启动桌面 QQ，再在 QQ 窗口切换账号', { stage: status?.stage })
   }
   if (status?.online && status.user_id) return ok({
     ...status, login_url: loginUrl, report_ready: direct?.online === true && direct.user_id === status.user_id
@@ -652,17 +672,16 @@ export async function napcatRequest(config, path, method = 'GET', query = {}) {
     if (connected?.value?.status) return ok(publicStatus(connected.value.status))
   }
   if (settings.installed || fromHub?.napcat_installed) {
-    if (settings.installed && settings.originalEntry) {
-      return ok({ online: false, stage: 'original_qq', napcat_installed: true,
-        error: 'NapCat 已安装。请在安装器中将程序入口切换为 NapCat，再点击「启动 NapCat」。' })
+    if (settings.desktopEntry && qqProcesses().length) {
+      return ok({ online: false, stage: 'desktop_unavailable', napcat_installed: true, qq_version: settings.qqVersion,
+        error: '桌面 QQ 接入尚未就绪。请修复桌面接入；若仍无法连接，请更新 HNU Agent。' })
     }
     return ok({ online: false, stage: 'stopped', napcat_installed: true,
-      error: '请在 NapCat 安装器中启动 NapCat，再返回检查 QQ 登录状态' })
+      error: '请启动桌面 QQ，Agent 将自动检测登录状态' })
   }
-  const detail = { online: false, stage: fromHub?.stage === 'error' ? 'error' : 'not_installed',
-    install_url: process.platform === 'darwin' ? installer : undefined }
+  const detail = { online: false, stage: fromHub?.stage === 'error' ? 'error' : 'not_installed' }
   const error = process.platform === 'darwin'
-    ? '尚未检测到 NapCat。请安装并启动 NapCat，再连接 QQ。'
+    ? '请点击「安装并连接 QQ」完成桌面接入'
     : '尚未检测到 NapCat。启动 NapCat 并配置群务台后再试。'
   return path === 'status' ? ok({ ...detail, error }) : fail(409, error, detail)
 }

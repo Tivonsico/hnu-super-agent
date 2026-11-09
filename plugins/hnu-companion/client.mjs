@@ -621,17 +621,6 @@ window.__ModuleLoader__.load({
           show && button(isPrivate ? '查看私聊' : '查看群消息', () => show(String(group.id)), { className: 'hnu-quiet' })))
     }
 
-    function verifiedUrl(value) {
-      if (typeof value !== 'string') return ''
-      try {
-        const url = new URL(value)
-        if (url.username || url.password) return ''
-        if (['http:', 'https:'].includes(url.protocol) && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return url.href
-        if (url.protocol === 'https:' && (url.hostname === 'napneko.github.io' || url.hostname === 'github.com' && url.pathname.startsWith('/NapNeko/'))) return url.href
-      } catch { /* Invalid links stay hidden. */ }
-      return ''
-    }
-
     function PermissionRow({ chat, group, refreshCount, save, show }) {
       const [visited, setVisited] = useState(false)
       const [count, setCount] = useState(null)
@@ -676,13 +665,13 @@ window.__ModuleLoader__.load({
       const [connection, setConnection] = useState(null)
       const [qr, setQr] = useState('')
       const [problem, setProblem] = useState('')
-      const [installUrl, setInstallUrl] = useState('')
       const [connecting, setConnecting] = useState(false)
       const [refreshing, setRefreshing] = useState(false)
       const [refreshCount, setRefreshCount] = useState(0)
       const [connectionMessage, setConnectionMessage] = useState('')
       const connectionEpoch = useRef(0)
       const qrRefreshing = useRef(false)
+      const autoConnected = useRef({ account: '', attempts: 0 })
       const [groupId, setGroupId] = useState('')
       const [name, setName] = useState('')
       async function loadQr(signal) {
@@ -723,20 +712,27 @@ window.__ModuleLoader__.load({
       function present(result) {
         setConnection(result)
         if (result.stage !== 'waiting_qr') setQr('')
-        const install = verifiedUrl(result.install_url || result.installUrl)
-        setInstallUrl(install)
       }
       async function refresh(signal) {
         if (qrRefreshing.current) return
         const epoch = connectionEpoch.current
-        const result = await request('napcat/status', undefined, signal)
+        let result = await request('napcat/status', undefined, signal)
         if (epoch !== connectionEpoch.current || signal?.aborted) return
+        const account = result.user_id
+        if (autoConnected.current.account !== account) autoConnected.current = { account, attempts: 0 }
+        if (result.online && account && !accountMismatch(result) && !result.report_ready && autoConnected.current.attempts < 3) {
+          autoConnected.current.attempts++
+          result = await request('napcat/setup', {})
+          if (epoch !== connectionEpoch.current || signal?.aborted) return
+          setProblem('')
+        }
         present(result)
         if (result.stage === 'waiting_qr') await loadQr(signal)
         return result
       }
       async function refreshConnection() {
         connectionEpoch.current++
+        autoConnected.current = { account: '', attempts: 0 }
         setProblem('')
         setConnectionMessage('')
         setRefreshing(true)
@@ -787,7 +783,7 @@ window.__ModuleLoader__.load({
       }
       const show = group => select({ group, view: 'board', list: 'messages', filter: '', anchor: '', ticket: '', locate: '' })
       const last = timeOf(state.connection?.last_message)
-      const stages = { waiting_qr: '等待扫码', waiting_login: '等待手机确认', original_qq: '已安装 · QQ 仍用原版入口',
+      const stages = { waiting_qr: '在桌面 QQ 扫码', waiting_login: '等待手机确认', needs_install: '需要安装桌面接入', installing: '正在安装桌面接入', desktop_unavailable: '桌面接入未就绪',
         stopped: 'NapCat 未运行', not_installed: '等待安装 NapCat',
         running_no_api: '管理接口未连通', offline: '已离线', duplicate_login: '此 QQ 已在桌面登录' }
       const canStart = ['stopped', 'offline'].includes(connection?.stage)
@@ -805,8 +801,11 @@ window.__ModuleLoader__.load({
             pill(state.dispatch?.available ? '派工可用' : '派工暂不可用')),
           h('div', { className: 'hnu-row' },
             canRefreshQr && button('换一个二维码', changeQr, { className: 'hnu-primary', disabled: connecting }),
-            canStart && button('扫码 · 只登录 Agent', () => connect('start?mode=agent'), { disabled: connecting }),
-            canStart && button('扫码 · 同时登录客户端', () => connect('start?mode=desktop'), { className: 'hnu-primary', disabled: connecting }),
+            ['needs_install', 'not_installed'].includes(connection?.stage)
+              && button('安装并连接 QQ', () => connect('install'), { className: 'hnu-primary', disabled: connecting }),
+            connection?.stage === 'desktop_unavailable'
+              && button('修复桌面接入', () => connect('install'), { className: 'hnu-primary', disabled: connecting }),
+            canStart && button('启动并连接 QQ', () => connect('start'), { className: 'hnu-primary', disabled: connecting }),
             accountMismatch(connection)
               && button('使用此 QQ', () => connect('account'), { className: 'hnu-primary', disabled: connecting }),
             connection?.online && !connection.report_ready && !accountMismatch(connection)
@@ -816,10 +815,9 @@ window.__ModuleLoader__.load({
           connection?.report_ready && h('p', { className: 'hnu-muted' }, '已接入群消息。'),
           connectionMessage && h('p', { role: 'status' }, connectionMessage),
           qr && h('img', { className: 'hnu-qr', src: qr, alt: 'QQ 登录二维码' }),
-          installUrl && h('div', { className: 'hnu-row' },
-            h('a', { href: installUrl, target: '_blank', rel: 'noreferrer' }, '下载 NapCat 安装器'),
-            h('span', { className: 'hnu-help', tabIndex: 0, 'aria-describedby': 'hnu-napcat-help' }, '？',
-              h('span', { id: 'hnu-napcat-help', role: 'tooltip' }, '解压并打开安装器。安装 NapCat 后切换程序入口，回来刷新连接。想同时使用桌面 QQ，先运行项目里的「启动桌面 QQ」。'))),
+          ['needs_install', 'not_installed', 'desktop_unavailable', 'installing'].includes(connection?.stage)
+            && h('span', { className: 'hnu-help', tabIndex: 0, 'aria-label': '安装帮助', 'aria-describedby': 'hnu-napcat-help' }, '？',
+              h('span', { id: 'hnu-napcat-help', role: 'tooltip' }, '点击安装后，在终端完成下载和管理员授权。安装会重启 QQ。若 macOS 拒绝修改 QQ，在系统设置的隐私与安全性、App 管理中允许终端管理 QQ，再重试。完成后在桌面 QQ 登录，回到这里会自动连接。')),
           (problem || connection?.error) && h('p', { role: 'alert' }, problem || connection.error)),
         !setupOnly && h('h3', null, '会话监听与权限管理'),
         !setupOnly && chatError && h('p', { role: 'alert' }, chatError),

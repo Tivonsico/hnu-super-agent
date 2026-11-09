@@ -1,15 +1,14 @@
-# macOS 的 QQ 接入
+# macOS QQ 接入
 
-先按 [README](../README.md) 启动 HNU Agent。常规接入方式是独立安装并启动与本机 QQ 版本兼容的 NapCatQQ，按 QQ 界面提示登录，然后在 HNU 的权限设置里点「接入群消息」。勾选要监听的群，保存后从消息大屏确认能看到新消息。切换采集账号时，先选「使用此 QQ」，再重新接入群消息。[NapCat 的 macOS 安装说明](https://napneko.github.io/guide/boot/Shell#macos)
+按 [README](../README.md) 准备 HNU 运行环境，将 QQ 安装到 `/Applications/QQ.app`，再打开 HNU Agent。
 
-「QQ 会话」可以读取当前连接可见的群聊和私聊。选中一条会话后，可用「加载更早消息」查看 QQ 仍能返回的历史。自动开单仍受群的监听和发起人规则控制。
+1. 在 QQ 连接页点击「安装并连接 QQ」。终端会下载固定版本的 NapCat Framework 并校验 SHA-256，备份本机 QQ 启动文件，然后请求管理员授权。安装完成后会重启 QQ。
+2. 如果 macOS 提示不允许修改 QQ，在「系统设置 → 隐私与安全性 → App 管理」中允许终端管理 QQ，再重试。
+3. 在桌面 QQ 扫码或使用已有登录。HNU 自动检测账号、配置消息接入。切换账号时，在桌面 QQ 切换，然后在 HNU 确认「使用此 QQ」。
+4. 在「会话设置」选择发起权限并开启监听。默认 30 分钟，支持修改时长。DSSA 识别的任务需人工批准开单。
 
-## 可选的桌面 QQ 接入脚本
+桌面窗口与 Agent 共用同一个 QQ 登录会话。安装入口也可直接双击项目里的「启动桌面 QQ.command」。QQ 更新覆盖接入入口时，在 HNU 重新安装即可修复。
 
-[启动桌面 QQ.command](<../启动桌面 QQ.command>) 是针对已配置 NapCat Mac 安装器的 **QQ 7.0.2-53644** 编写的实验入口。它使用 **NapCat Framework v4.18.42**，需要将发行包 `NapCat.Framework.zip` 放进项目的 `.local/qq-desktop/`。脚本启动前会校验 SHA-256，并检查 QQ 的加载入口。[NapCat Framework 发布包](https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.42/NapCat.Framework.zip) · [NapCat Mac 安装器](https://github.com/NapNeko/NapCat-Mac-Installer)
+安装按本机启动文件结构检测，不限制 QQ 版本号。当前已完成 QQ 7.0.3-54395 的实机登录和会话读取验证。启动器、原生会话接口或处理器架构变化仍需相应适配。安装失败会保留错误信息，运行日志位于 `.local/qq-desktop/desktop.log`。
 
-首次安装时会请求本机管理员授权来更新 QQ 启动入口。需要恢复时，先退出 QQ，再从项目根目录运行：
-
-```sh
-./启动桌面\ QQ.command --restore
-```
+退出 QQ 后，从项目目录运行 `./启动桌面\ QQ.command --restore`，可恢复本版本安装前备份的入口。每个 QQ 版本分别保留备份。

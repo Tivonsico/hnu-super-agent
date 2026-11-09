@@ -340,7 +340,7 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state, app
           const id = url.searchParams.get('id')
           if (route === 'permissions' && !conversationId.safeParse(id).success) return respond(400, { error: '会话无效' })
           const result = await napcatRequest(config, route, req.method, {
-            account: bound, mode: url.searchParams.get('mode'), activity: route === 'conversations' ? queue.activity() : undefined,
+            account: bound, activity: route === 'conversations' ? queue.activity() : undefined,
             kind: url.searchParams.get('kind'), id, before: url.searchParams.get('before'),
             policy: route === 'permissions' ? queue.group(id, bound) : undefined,
           })
