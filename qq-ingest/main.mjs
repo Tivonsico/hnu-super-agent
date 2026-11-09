@@ -20,7 +20,7 @@ try {
   while (!controller.signal.aborted) {
     try {
       if (config.dynamicGroups) {
-        const groups = queue.groups().filter(group => group.enabled).map(group => group.id)
+        const groups = queue.groups().filter(group => group.enabled && !group.id.startsWith('private:')).map(group => group.id)
         const version = groups.join(',')
         if (appliedGroups !== version) {
           await syncSubscriptions(groups, config.noticeHubWeb, controller.signal)

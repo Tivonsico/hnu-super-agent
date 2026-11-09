@@ -7,15 +7,16 @@ import { openReviews } from '../../hnu/reviews.mjs'
 import { documentWork } from '../../hnu/document-work.mjs'
 import { bindExecution } from './execution.mjs'
 import { readCandidates, sourceId } from './candidates.mjs'
-import { napcatRequest } from './napcat.mjs'
+import { napcatRequest, qqImage } from './napcat.mjs'
 
-export const inject = ['orchestrator', 'webServer', 'sessionController', 'credentials']
+export const inject = ['orchestrator', 'webServer', 'sessionController', 'credentials', 'workspaceRegistry']
 const sourceName = 'hnu-qq'
 const autoScope = '为这条消息中明确提出的校园写作任务生成一份 Markdown 提纲。只使用本工单原文和已授权资料。'
 const followup = /(?:续办|追加|上(?:一|个|次)工单|工单\s*#|ticket\s*#)/i
 const qqId = z.string().regex(/^[1-9][0-9]{0,19}$/)
+const conversationId = z.string().regex(/^(?:private:)?[1-9][0-9]{0,19}$/)
 const groupInput = z.object({
-  id: qqId, name: z.string().trim().min(1).max(100), enabled: z.boolean(),
+  id: conversationId, name: z.string().trim().min(1).max(100), enabled: z.boolean(),
   mode: z.enum(['observe', 'auto']), roles: z.array(z.enum(['owner', 'admin'])).max(2),
   senders: z.array(qqId).max(100), keywords: z.array(z.string().trim().min(1).max(60)).max(30),
   version: z.number().int().nonnegative(),
@@ -179,10 +180,6 @@ function onlineAccount(result) {
 }
 
 const officialProvider = 'deepseek-official'
-const officialModels = [
-  { provider: officialProvider, id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' },
-  { provider: officialProvider, id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
-]
 const keyRef = 'DEEPSEEK_API_KEY'
 async function modelState(ctx) {
   const catalog = await ctx.sessionController.modelCatalog()
@@ -191,30 +188,69 @@ async function modelState(ctx) {
   const current = ctx.orchestrator.store.settings().eval.model
   const select = model => models.find(item => item.provider === model?.provider && item.id === model?.model)
   const selected = select(current) ?? models.find(item => item.id === 'v41f1017') ?? select(catalog.default) ?? models[0]
-  return { configured: Boolean(selected), selected: selected ?? officialModels[0], models: selected ? models : officialModels }
+  return { configured: Boolean(selected), selected, models }
 }
 
 async function saveModel(ctx, value) {
   const input = z.object({
-    apiKey: z.string().trim().min(1).max(4096).optional(),
+    apiKey: z.string().trim().min(1).max(4096).regex(/^[!-~]+$/).optional(),
     provider: z.string().min(1).optional(), model: z.string().min(1).optional(),
   }).parse(value)
   const options = await modelState(ctx)
-  const requested = input.model ? [...options.models, ...officialModels].find(item => item.id === input.model && item.provider === input.provider)
-    : input.apiKey ? officialModels[0] : options.selected
-  if (!requested || input.apiKey && requested.provider !== officialProvider) throw Object.assign(new Error('请选择支持的模型'), { status: 400 })
-  if (input.apiKey) await ctx.credentials.set(keyRef, input.apiKey)
+  let requested = input.model ? options.models.find(item => item.id === input.model && item.provider === input.provider) : options.selected
+  const invalid = (message, status = 400) => Object.assign(new Error(message), { status })
   const runtime = ctx.orchestrator
-  const model = { provider: requested.provider, model: requested.id }
-  const executor = runtime.settings.block('executor')
-  await runtime.settings.save('executor', { ...executor.value, model }, executor.revision, 'panel')
-  const evaluation = runtime.settings.block('eval')
-  await runtime.settings.save('eval', { ...evaluation.value, model, mode: 'auto' }, evaluation.revision, 'panel')
-  return modelState(ctx)
+  const saved = []
+  let previousKey, keyWritten, result
+  try {
+    if (input.apiKey) {
+      const response = await fetch('https://api.deepseek.com/models', { redirect: 'error', signal: AbortSignal.timeout(10000),
+        headers: { Authorization: 'Bearer ' + input.apiKey } }).catch(() => undefined)
+      if (response?.status === 401 || response?.status === 403) throw invalid('DeepSeek API Key 无法通过验证')
+      const listing = response?.ok && await response.json().catch(() => undefined)
+      const ids = Array.isArray(listing?.data) ? listing.data.map(model => model?.id).filter(id => typeof id === 'string') : []
+      if (!ids.length) throw invalid('暂时无法读取 DeepSeek 模型，请重试', 503)
+      const preferred = requested?.provider === officialProvider && ids.includes(requested.id) ? requested.id : 'deepseek-flash'
+      previousKey = await ctx.credentials.resolve(keyRef)
+      await ctx.credentials.set(keyRef, input.apiKey)
+      keyWritten = true
+      const catalog = await modelState(ctx)
+      const available = catalog.models.filter(item => item.provider === officialProvider && ids.includes(item.id))
+      requested = available.find(item => item.id === preferred) ?? available[0]
+      if (!requested) throw invalid('DSH 尚未加载此 Key 可用的 DeepSeek 模型', 503)
+    }
+    if (!requested) throw invalid('请选择可用模型')
+    const model = { provider: requested.provider, model: requested.id }
+    const old = runtime.store.settings().eval.model
+    for (const block of ['executor', 'eval']) {
+      const previous = runtime.settings.block(block)
+      const value = { ...previous.value, model }
+      if (block === 'eval' && !previous.value.model) value.mode = 'auto'
+      const change = await runtime.settings.save(block, value, previous.revision, 'panel')
+      if (change.revision !== previous.revision) saved.push({ block, previous, revision: change.revision })
+    }
+    result = await modelState(ctx)
+    if (old?.provider !== model.provider || old?.model !== model.model) {
+      await ctx.sessionController.selectModel({ sessionId: runtime.masterId, ...model })
+    }
+  } catch (failure) {
+    try {
+      if (keyWritten && (await ctx.credentials.resolve(keyRef))?.value === input.apiKey) {
+        if (previousKey?.source === 'file') await ctx.credentials.set(keyRef, previousKey.value)
+        else await ctx.credentials.unset(keyRef)
+      }
+      for (const { block, previous, revision } of saved.reverse()) {
+        if (runtime.settings.block(block).revision === revision) await runtime.settings.save(block, previous.value, revision, 'panel')
+      }
+    } catch { throw invalid('模型配置失败，部分设置需要重新确认', 500) }
+    throw failure
+  }
+  return result
 }
 
 function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
   const web = ctx.webServer
+  let modelUpdate = Promise.resolve()
   const session = createHmac('sha256', config.reviewerKey).update(randomBytes(32)).digest('hex')
   const noCache = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' }
   const isLoopback = host => host === `127.0.0.1:${web.port}` || host === `localhost:${web.port}`
@@ -250,6 +286,25 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
       const url = new URL(req.url, 'http://127.0.0.1')
       const path = url.pathname.slice('/hnu/api/'.length)
       try {
+        if (path === 'qq-image' && req.method === 'GET') {
+          const account = queue.account()
+          const kind = url.searchParams.get('kind')
+          const id = url.searchParams.get('id')
+          const messageId = url.searchParams.get('message')
+          const index = Number(url.searchParams.get('index'))
+          if (!account || !['group', 'private'].includes(kind) || !qqId.safeParse(id).success
+            || !/^-?[1-9][0-9]{0,15}$/.test(messageId ?? '') || !Number.isInteger(index) || index < 0 || index > 29) {
+            return respond(400, { error: '图片参数无效' })
+          }
+          const chat = kind === 'group' ? id : 'private:' + id
+          const original = queue.get(account + ':' + chat + ':' + messageId)
+          const signed = original?.raw ? JSON.parse(Buffer.from(original.raw)) : undefined
+          const image = await qqImage(config, account, { kind, id, messageId, index, signed }).catch(() => undefined)
+          if (account !== queue.account()) return respond(409, { error: 'QQ 账号已切换' })
+          if (!image) return respond(404, { error: '原图暂不可用' })
+          res.writeHead(200, { ...noCache, 'content-type': image.type })
+          return res.end(image.bytes)
+        }
         if (path.startsWith('napcat/')) {
           const route = path.slice(7)
           if (route === 'report' && req.method === 'GET') return respond(200, config.napcatReport)
@@ -262,10 +317,14 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
             return respond(200, { ...verified.value, boundAccount: account })
           }
           const bound = queue.account()
+          const id = url.searchParams.get('id')
+          if (route === 'permissions' && !conversationId.safeParse(id).success) return respond(400, { error: '会话无效' })
           const result = await napcatRequest(config, route, req.method, {
-            account: bound, kind: url.searchParams.get('kind'), id: url.searchParams.get('id'), before: url.searchParams.get('before'),
+            account: bound, mode: url.searchParams.get('mode'), activity: route === 'conversations' ? queue.activity() : undefined,
+            kind: url.searchParams.get('kind'), id, before: url.searchParams.get('before'),
+            policy: route === 'permissions' ? queue.group(id, bound) : undefined,
           })
-          if (['conversations', 'history'].includes(route) && result.status === 200 && bound !== queue.account()) {
+          if (['conversations', 'history', 'permissions'].includes(route) && result.status === 200 && bound !== queue.account()) {
             return respond(409, { error: 'QQ 账号已切换，请先确认使用当前账号' })
           }
           if (route === 'webui' && result.status === 200) {
@@ -282,12 +341,17 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
           return respond(result.status, { ...result.value, boundAccount: queue.account() })
         }
         if (path === 'model' && req.method === 'GET') return respond(200, await modelState(ctx))
-        if (path === 'model' && req.method === 'POST') return respond(200, await saveModel(ctx, await readBody(req)))
+        if (path === 'model' && req.method === 'POST') {
+          const input = await readBody(req)
+          const update = modelUpdate.then(() => saveModel(ctx, input))
+          modelUpdate = update.catch(() => {})
+          return respond(200, await update)
+        }
         const display = event => ({ ...event, reason: state.reasons.get(event.id) ?? 'awaiting_candidate', ticket: desk.ticketFor(event.id) })
         if (req.method === 'GET' && path === 'messages') {
           const before = z.coerce.number().int().positive().safeParse(url.searchParams.get('before'))
           const group = url.searchParams.get('group')
-          if (group && !qqId.safeParse(group).success || !before.success) return respond(400, { error: '消息游标无效' })
+          if (group && !conversationId.safeParse(group).success || !before.success) return respond(400, { error: '消息游标无效' })
           const rows = queue.page(before.data, group, 51)
           return respond(200, { events: rows.slice(0, 50).map(display), next: rows.length > 50 ? rows[49].cursor : null })
         }
@@ -331,14 +395,18 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
         const data = await readBody(req)
         if (path === 'groups') {
           if (queue.account() !== data.account) return respond(409, { error: 'QQ 账号已切换，请刷新群设置' })
-          return respond(200, queue.saveGroup(groupInput.parse(data)))
+          const input = groupInput.parse(data)
+          if (input.id.startsWith('private:') && input.enabled && input.mode === 'auto' && !input.keywords.length) {
+            return respond(400, { error: '私聊自动接单需要至少一个触发关键词' })
+          }
+          return respond(200, queue.saveGroup(input))
         }
         if (path === 'open') {
           const input = z.object({ eventId, scope: text, materialIds: z.array(z.string().max(80)).max(10).default([]) }).parse(data)
           const existing = desk.ticketFor(input.eventId)
           if (existing) return respond(200, { ticket: existing })
           const event = queue.get(input.eventId)
-          if (!currentEvent(queue, event?.id) || !event?.text || event.status === 'conflict' || !queue.group(event.group_id)?.enabled) {
+          if (!currentEvent(queue, event?.id) || !(event?.text || event?.attachments?.some(item => item.type === 'image')) || event.status === 'conflict' || !queue.group(event.group_id)?.enabled) {
             return respond(409, { error: '请先确认原消息，并开启来源群监听' })
           }
           if (input.materialIds.some(id => !Object.hasOwn(config.materials ?? {}, id))) return respond(400, { error: '选定资料不存在' })
@@ -402,7 +470,14 @@ export function apply(ctx) {
     const queue = openQueue(config.queue)
     const controller = new AbortController()
     const state = { reasons: new Map(), collection: '等待收件', candidate: '等待群务台', error: null }
-    let reviews, policy, unbind, unregister, unregisterSource, source, desk
+    let reviews, policy, unbind, unregister, unregisterSource, source, desk, work
+    function workspaceTitle(ticket) {
+      if (!desk.owns(ticket)) return
+      const group = desk.origin(ticket).meta.group
+      if (!qqId.safeParse(group).success) return
+      const knownGroups = state.groups?.account === queue.account() ? state.groups?.list : undefined
+      return knownGroups?.find(item => item.id === group)?.name || queue.group(group)?.name
+    }
     function release() {
       unregister?.()
       unbind?.()
@@ -418,8 +493,8 @@ export function apply(ctx) {
       source = runtime.context(kind)
       policy = bindPolicy(runtime, queue, reviews)
       desk = workspace(runtime, queue, reviews, policy, source)
-      const work = documentWork(config)
-      unbind = bindExecution(runtime, work, reviews, queue, policy.authorized)
+      work = documentWork(config)
+      unbind = bindExecution(runtime, work, reviews, queue, policy.authorized, config, workspaceTitle)
       unregister = registerApi(ctx, config, queue, reviews, work, source, desk, state)
     } catch (error) {
       release()
@@ -447,7 +522,10 @@ export function apply(ctx) {
       const byEvent = new Map(tickets.map(ticket => [desk.origin(ticket).meta.eventId, ticket]))
       for (const event of events) {
         const group = queue.group(event.group_id)
-        const candidate = candidates.get(sourceId(event))
+        const isPrivate = event.group_id.startsWith('private:')
+        const candidate = isPrivate
+          ? (group?.keywords.some(word => event.text.includes(word)) ? { id: event.id } : null)
+          : candidates.get(sourceId(event))
         const grant = reviews.manualRequest(event.id)
         const trigger = makeTrigger(event, candidate, grant)
         const decisionId = runtime.store.triggers.disposition(trigger.id)?.decisionId
@@ -471,7 +549,7 @@ export function apply(ctx) {
           }
         } else if (event.status !== 'verified' || followup.test(event.text)) reason = 'needs_confirmation'
         else if (result?.kind === 'ignore') reason = 'ordinary'
-        else if (!candidate || !event.forwarded) reason = event.forwarded ? 'ordinary' : 'awaiting_candidate'
+        else if (!candidate || (!isPrivate && !event.forwarded)) reason = isPrivate || event.forwarded ? 'ordinary' : 'awaiting_candidate'
         else if (!eligible(event, group)) reason = !event.role && !group.senders.includes(event.actor) ? 'needs_confirmation' : 'sender_not_allowed'
         else if (!policy.automatic(event, group)) reason = 'observed'
         else {
@@ -481,6 +559,13 @@ export function apply(ctx) {
         state.reasons.set(event.id, reason)
       }
       let followupError
+      for (const entry of ctx.workspaceRegistry.list()) {
+        const ticket = runtime.store.tickets.get(entry.title)
+        const title = workspaceTitle(ticket)
+        if (title && title !== entry.title && entry.path === work.directoryFor(ticket.id)) {
+          try { await entry.setTitle(title) } catch (error) { followupError ??= error.message }
+        }
+      }
       if (dispatchReady) {
         for (const input of reviews.pendingInputs()) {
           try {

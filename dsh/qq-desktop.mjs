@@ -21,10 +21,35 @@ const downloads = join(root, '.local/qq-desktop')
 const verifiedArchive = join(downloads, 'NapCat.Framework.verified.zip')
 const archive = existsSync(verifiedArchive) ? verifiedArchive : join(downloads, 'NapCat.Framework.zip')
 const frameworkDigest = '118d66bb4849b7fcec05a4cafc9e33ed44f9236d56661f7097aba2ab3081df2e'
+const napcatDigest = '19ba6bc8ec3a1a7c705c0d3b7e16c08e09ab9bf17ef5b3639b9ed2fef15cdfa0'
 const marker = '// HNU Agent desktop Framework'
 const backup = join(downloads, 'original-loader.js')
 const prepared = join(downloads, 'desktop-loader.js')
 const currentLoader = () => existsSync(loader) ? readFileSync(loader, 'utf8') : ''
+
+function prepareLayout() {
+  const entry = join(framework, 'napcat.mjs')
+  const original = entry + '.hnu-original'
+  const current = readFileSync(entry, 'utf8')
+  const patchMarker = '    // HNU Agent: read QQ conversation layout.'
+  const source = current.includes(patchMarker) ? readFileSync(original, 'utf8') : current
+  const anchor = '    const ret = await this.core.apis.UserApi.getRecentContactListSnapShot(+payload.count);\n'
+  if (createHash('sha256').update(source).digest('hex') !== napcatDigest || source.split(anchor).length !== 2) {
+    throw new Error('NapCat 最近会话接口与此版本不兼容')
+  }
+  if (!existsSync(original)) writeFileSync(original, source, { mode: 0o600, flag: 'wx' })
+  const hook = [patchMarker, '    if (payload.hnu_layout === true) {',
+    '      const { readQQLayout } = await import("./hnu-qq-layout.mjs");',
+    '      return readQQLayout(ret.info, this.core.apis);', '    }', '',
+  ].join('\n')
+  for (const [file, value] of [[join(framework, 'hnu-qq-layout.mjs'), readFileSync(join(root, 'dsh/qq-layout.mjs'), 'utf8')],
+    [entry, source.replace(anchor, anchor + hook)]]) {
+    if (existsSync(file) && readFileSync(file, 'utf8') === value) continue
+    const staging = file + '.hnu-next'
+    writeFileSync(staging, value, { mode: 0o600 })
+    renameSync(staging, file)
+  }
+}
 
 function prepare() {
   const spec = JSON.parse(readFileSync(join(resources, 'package.json'), 'utf8'))
@@ -47,6 +72,7 @@ function prepare() {
     const module = join(framework, 'native', name + '.darwin.' + process.arch + '.node')
     if (existsSync(module)) renameSync(module, module + '.disabled')
   }
+  prepareLayout()
   const current = currentLoader() || (existsSync(backup) ? readFileSync(backup, 'utf8') : '')
   if (current.startsWith(marker)) return
   if (!current.includes('const loadNapcat = process.argv.includes(')) throw new Error('QQ 启动入口已经变化')

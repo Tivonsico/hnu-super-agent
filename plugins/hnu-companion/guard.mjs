@@ -1,7 +1,7 @@
 export const inject = ['tools']
 
 const evaluation = new Set(['orchestrator_eval', 'orchestrator_eval_decide', 'orchestrator_read', 'orchestrator_route'])
-const execution = new Set(['hnu_read_task', 'hnu_write_outline', 'orchestrator_report', 'orchestrator_read'])
+const execution = new Set(['hnu_read_task', 'hnu_read_image', 'hnu_write_outline', 'orchestrator_report', 'orchestrator_read'])
 
 export function denyManagedTool({ agent, name, arguments: args }) {
   const id = agent?.id

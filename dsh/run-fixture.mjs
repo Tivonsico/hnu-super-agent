@@ -19,10 +19,10 @@ const services = {
       NOTICEHUB_IMMEDIATE_GROUPS: receiver.groups.join(','), NOTICEHUB_ONEBOT_ENABLED: '1',
       NOTICEHUB_ONEBOT_HOST: '127.0.0.1', NOTICEHUB_ONEBOT_PORT: new URL(receiver.noticeHubReceiver.url).port, NOTICEHUB_ONEBOT_TOKEN: receiver.noticeHubReceiver.token,
       NOTICEHUB_WEB: '1', NOTICEHUB_WEB_HOST: '127.0.0.1', NOTICEHUB_WEB_PORT: new URL(companion.noticeHubTasks.url).port, NOTICEHUB_WEB_TOKEN: companion.noticeHubTasks.token,
-      NOTICEHUB_CATCHUP_ENABLED: '0', NOTICEHUB_LAB_RULES: '1', NOTICEHUB_ATTACHMENTS: '0',
+      NOTICEHUB_CATCHUP_ENABLED: '0', NOTICEHUB_LAB_RULES: '1', NOTICEHUB_ATTACHMENTS: '1',
       NOTICEHUB_DATA_DIR: noticeData, NOTICEHUB_LOG_DIR: join(data, 'notice-log'),
-      ...(process.env.HNU_NAPCAT_API_URL ? { NOTICEHUB_NAPCAT_API_URL: process.env.HNU_NAPCAT_API_URL } : {}),
-      ...(process.env.HNU_NAPCAT_API_TOKEN ? { NOTICEHUB_NAPCAT_API_TOKEN: process.env.HNU_NAPCAT_API_TOKEN } : {}),
+      NOTICEHUB_NAPCAT_API_URL: process.env.HNU_NAPCAT_API_URL ?? companion.napcatRead?.url ?? '',
+      NOTICEHUB_NAPCAT_API_TOKEN: process.env.HNU_NAPCAT_API_TOKEN ?? companion.napcatRead?.token ?? '',
     }],
 }
 const selected = services[service]

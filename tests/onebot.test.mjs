@@ -108,3 +108,34 @@ test('saved group settings gate new messages and keep the signed sender role and
   assert.deepEqual(queue.events().map(item => item.message_id), ['2', '3', '7'])
 
 })
+
+test('signed private messages create evidence only for an opted-in conversation', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'hnu-onebot-private-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const queue = openQueue(join(dir, 'queue.sqlite'))
+  const server = receiver(queue, { token: 'test', account: '100', dynamicGroups: true }).listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve))
+    queue.close()
+  })
+  const time = Math.floor(Date.now() / 1000)
+  async function send(id, actor, extra = {}) {
+    const body = JSON.stringify({ post_type: 'message', message_type: 'private', self_id: 100,
+      user_id: actor, message_id: id, time, message: [{ type: 'text', data: { text: '请列出提纲' } }], ...extra })
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/onebot/event`, {
+      method: 'POST', body, headers: { 'X-Signature': 'sha1=' + createHmac('sha1', 'test').update(body).digest('hex') },
+    })
+    assert.equal(response.status, 204)
+  }
+  await send(1, 101)
+  assert.deepEqual(queue.events(), [])
+  assert.equal(queue.activity()['private:101'], time)
+  queue.saveGroup({ id: 'private:101', name: '联系人', enabled: true, mode: 'observe',
+    senders: ['101'], roles: [], keywords: [], version: 0 })
+  await send(2, 101)
+  await send(3, 102)
+  await send(4, 100, { post_type: 'message_sent', target_id: 101 })
+  assert.deepEqual(queue.events().map(item => item.id), ['100:private:101:2', '100:private:101:4'])
+  assert.deepEqual(queue.unsent(), [])
+})

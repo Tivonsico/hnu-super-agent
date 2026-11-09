@@ -26,6 +26,9 @@ export function openQueue(path) {
     CREATE TABLE IF NOT EXISTS account_groups (
       account TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(account, id)
     );
+    CREATE TABLE IF NOT EXISTS conversation_activity (
+      account TEXT NOT NULL, id TEXT NOT NULL, active_at INTEGER NOT NULL, PRIMARY KEY(account, id)
+    );
     CREATE TABLE IF NOT EXISTS events (
       id TEXT PRIMARY KEY, group_id TEXT NOT NULL, message_id TEXT, actor TEXT, sent_at INTEGER,
       text TEXT NOT NULL, raw BLOB NOT NULL, fingerprint TEXT NOT NULL, status TEXT NOT NULL,
@@ -68,6 +71,12 @@ export function openQueue(path) {
   return {
     close: () => db.close(),
     group: loadGroup,
+    activity: () => Object.fromEntries(db.prepare('SELECT id, active_at FROM conversation_activity WHERE account = ?')
+      .all(account() ?? '').map(row => [row.id, row.active_at])),
+    recordActivity(self, id, at) {
+      db.prepare(`INSERT INTO conversation_activity SELECT ?, ?, ? WHERE (SELECT account FROM connection) = ?
+        ON CONFLICT(account, id) DO UPDATE SET active_at = max(active_at, excluded.active_at)`).run(self, id, at, self)
+    },
     account,
     selectAccount(id) {
       if (asId(id) !== id) throw new Error('QQ 账号无效')
@@ -129,15 +138,22 @@ export function openQueue(path) {
         .all((account() ?? '') + ':%', before, groupId, groupId, limit).map(view)
     },
     unsent: () => db.prepare(`SELECT id, raw FROM events WHERE id LIKE ? AND forwarded = 0
-      AND status <> 'conflict' AND message_id IS NOT NULL AND actor IS NOT NULL ORDER BY rowid LIMIT 25`)
+      AND group_id NOT LIKE 'private:%' AND status <> 'conflict' AND message_id IS NOT NULL AND actor IS NOT NULL ORDER BY rowid LIMIT 25`)
       .all((account() ?? '') + ':%'),
     forwarded: id => db.prepare('UPDATE events SET forwarded = 1 WHERE id = ?').run(id),
   }
 }
 
+function conversationId(payload) {
+  if (payload.message_type === 'group') return asId(payload.group_id)
+  if (payload.message_type !== 'private') return
+  const peer = asId(payload.post_type === 'message_sent' ? payload.target_id : payload.user_id)
+  return peer && 'private:' + peer
+}
+
 function normalize(payload, raw, options, queue) {
   const self = asId(payload.self_id)
-  const group = asId(payload.group_id)
+  const group = conversationId(payload)
   if (!self || self !== queue.account() || !group) return
   const settings = options.dynamicGroups ? queue.group(group, self) : undefined
   if (options.dynamicGroups ? !settings?.enabled : !options.groups.includes(group)) return
@@ -212,7 +228,12 @@ export function receiver(queue, options) {
       if (payload.post_type === 'meta_event' && payload.meta_event_type === 'heartbeat' && self) {
         queue.touch(payload.status?.online === false || payload.status?.good === false ? 0 : 1, self)
       }
-      if (['message', 'message_sent'].includes(payload.post_type) && payload.message_type === 'group') {
+      if (['message', 'message_sent'].includes(payload.post_type) && self && self === queue.account()) {
+        const chat = conversationId(payload)
+        const now = Math.floor(Date.now() / 1000)
+        if (options.dynamicGroups && chat && Number.isSafeInteger(payload.time) && payload.time > 0 && payload.time <= now + 120) {
+          queue.recordActivity(self, chat, payload.time)
+        }
         const event = normalize(payload, raw, options, queue)
         if (event) {
           queue.save(event, raw, self)
