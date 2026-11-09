@@ -413,7 +413,7 @@ window.__ModuleLoader__.load({
       })
       const result = await response.json().catch(() => ({}))
       if (!response.ok || result.ok === false) {
-        throw Object.assign(new Error(result.error || (response.status === 403 ? '请通过 HNU Agent 启动入口重新打开工作区。' : '请求失败（' + response.status + '）')),
+        throw Object.assign(new Error(result.error || '请求失败（' + response.status + '）'),
           { status: response.status, data: result })
       }
       return result

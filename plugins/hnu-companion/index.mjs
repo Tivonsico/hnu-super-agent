@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
@@ -9,7 +9,7 @@ import { bindExecution } from './execution.mjs'
 import { bindApprovals } from './approval.mjs'
 import { napcatRequest, qqImage } from './napcat.mjs'
 
-export const inject = ['orchestrator', 'webServer', 'sessionController', 'credentials', 'workspaceRegistry']
+export const inject = ['orchestrator', 'webServer', 'connection', 'sessionController', 'credentials', 'workspaceRegistry']
 const sourceName = 'hnu-qq'
 const qqId = z.string().regex(/^[1-9][0-9]{0,19}$/)
 const conversationId = z.string().regex(/^(?:private:)?[1-9][0-9]{0,19}$/)
@@ -28,8 +28,6 @@ const decision = z.object({
   ticket: ticketId, version: z.number().int().positive(), commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
   action: z.enum(['approve', 'reject', 'revise']), note: z.string().trim().max(1500).optional(),
 })
-const cookieName = 'hnu_workspace'
-
 function configOf() {
   const path = process.env.HNU_COMPANION_CONFIG
   if (!path || (statSync(path).mode & 0o077)) throw new Error('工作区配置文件权限必须为 600')
@@ -275,7 +273,6 @@ async function saveModel(ctx, value) {
 function registerApi(ctx, config, queue, reviews, work, source, desk, state, approvals) {
   const web = ctx.webServer
   let modelUpdate = Promise.resolve()
-  const session = createHmac('sha256', config.reviewerKey).update(randomBytes(32)).digest('hex')
   const noCache = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' }
   const isLoopback = host => host === `127.0.0.1:${web.port}` || host === `localhost:${web.port}`
   const launch = web.register({ kind: 'prefix', path: '/hnu/launch', handler: async (req, res) => {
@@ -288,8 +285,7 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state, app
     }
     const nonce = randomBytes(18).toString('base64')
     res.writeHead(200, { ...noCache, 'content-type': 'text/html; charset=utf-8',
-      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; frame-ancestors 'none'`,
-      'set-cookie': `${cookieName}=${session}; HttpOnly; SameSite=Strict; Path=/hnu/` })
+      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; frame-ancestors 'none'` })
     res.end(`<!doctype html><meta charset="utf-8"><title>HNU Agent</title><script nonce="${nonce}">
       sessionStorage.setItem('hnu.workspace.launch', '1');
       location.replace('/?token=${token}');
@@ -302,11 +298,11 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state, app
         res.end(JSON.stringify(value))
       }
       const host = req.headers.host
-      const supplied = req.headers.cookie?.split(';').map(cookie => cookie.trim())
-        .find(cookie => cookie.startsWith(cookieName + '='))?.slice(cookieName.length + 1)
-      if (!isLoopback(host) || req.method !== 'GET' && req.headers.origin !== `http://${host}` || !safeEqual(supplied, session)) {
-        return respond(403, { error: '请从 HNU Agent 启动入口打开工作区' })
+      if (!isLoopback(host) || req.method !== 'GET' && req.headers.origin !== `http://${host}`) {
+        return respond(403, { error: '工作区请求来源无效' })
       }
+      const rejection = ctx.connection.requestRejection(req)
+      if (rejection) return respond(rejection, { error: '请重新打开 DSH 工作区' })
       const url = new URL(req.url, 'http://127.0.0.1')
       const path = url.pathname.slice('/hnu/api/'.length)
       try {
