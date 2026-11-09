@@ -7,13 +7,14 @@ window.__ModuleLoader__.load({
     const panel = 'hnu-companion'
     const brand = 'HNU Agent'
     const labels = {
-      ordinary: '普通消息', observed: '观察中', waiting_candidate: '等待候选', awaiting_candidate: '等待候选',
+      ordinary: '普通消息', observed: '观察中', waiting_candidate: '等待评估', awaiting_candidate: '等待评估',
+      pending_open: '待审核开单', open_rejected: '已拒绝开单',
       sender_not_allowed: '发起人未授权', needs_confirmation: '待确认', group_disabled: '监听已关闭',
       queued: '等待派工', dssa: '已送审', opened: '已建工单', continued: '已关联',
       pending: '待审核', approve: '已批准', approved: '已批准', revise: '已要求修改',
       reject: '已拒绝', superseded: '已被新版替代', 'qq-change': '需求已更新',
       completed: '已完成', failed: '执行失败', running: '执行中', ready: '已交付',
-      observe: '仅观察', auto: '自动接单', off: '监听已关闭',
+      observe: '仅观察', auto: '自动送审', off: '监听已关闭',
     }
     const roleNames = { owner: '群主', admin: '管理员', member: '成员' }
     const welcomeKey = 'hnu.workspace.welcome.v1'
@@ -443,6 +444,26 @@ window.__ModuleLoader__.load({
         alt: 'QQ 消息图片', loading: 'lazy', onError: () => setFailed(true) })
     }
 
+    function OpeningReview({ proposal, groupId, act, openTicket, showSource }) {
+      const [busy, setBusy] = useState(false)
+      async function review(action) {
+        if (busy) return
+        setBusy(true)
+        try {
+          const result = await act('approve-open', { eventId: proposal.eventId, version: proposal.version, action })
+          if (result?.ticket) openTicket(result.ticket, groupId)
+        } finally { setBusy(false) }
+      }
+      return h('section', { className: 'hnu-card hnu-stack', 'aria-label': '待审核开单' },
+        h('div', { className: 'hnu-row hnu-between' }, h('h3', null, proposal.title), pill('待审核开单', 'pending')),
+        h('p', null, proposal.scope),
+        proposal.reason && h('p', { className: 'hnu-muted' }, proposal.reason),
+        h('div', { className: 'hnu-row' },
+          button('批准开单并执行', () => review('approve'), { className: 'hnu-primary', disabled: busy }),
+          button('拒绝开单', () => review('reject'), { disabled: busy }),
+          showSource && button('查看来源消息', showSource, { className: 'hnu-quiet' })))
+    }
+
     function MessageCard({ event, groups, tickets, materials, selection, select, act, openTicket }) {
       const [action, setAction] = useState('')
       const [scope, setScope] = useState('')
@@ -452,7 +473,10 @@ window.__ModuleLoader__.load({
       const linked = ticketKey(event.ticket) || tickets.find(ticket => eventKey(ticket.evidence) === id || (ticket.evidence?.group_id === event.group_id && ticket.evidence?.message_id === event.message_id))?.id
       const reason = linked ? 'opened' : event.reason || event.status
       const group = groups.find(item => String(item.id) === String(event.group_id))
-      const selectable = !event.historyOnly && !linked && group?.enabled && event.status !== 'conflict' && (Boolean(event.text) || event.attachments?.some(item => item.type === 'image'))
+      const allowed = group?.enabled && event.received_at >= group.enabledAt
+        && (group.roles.includes(event.role) || group.senders.includes(event.actor))
+      const selectable = !event.historyOnly && !linked && !event.proposal && reason !== 'open_rejected' && allowed
+        && event.status !== 'conflict' && Boolean(event.message_id && event.sent_at && (event.text || event.attachments?.some(item => item.type === 'image')))
       const choices = tickets.filter(ticket => String(ticket.evidence?.group_id) === String(event.group_id))
       const timestamp = timeOf(event.sent_at || event.received_at || event.created_at)
       const imageCount = Math.min(30, Math.max(event.images || 0, (event.attachments || []).filter(item => item.type === 'image').length))
@@ -461,7 +485,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'hnu-row hnu-muted' },
             h('span', null, groupName(groups, event.group_id)), h('strong', null, event.name || event.actor || '未知发件人'),
             timestamp && h('time', null, timestamp)),
-          pill(status(reason), reason === 'needs_confirmation' ? 'pending' : linked ? 'active' : undefined)),
+          pill(status(reason), ['needs_confirmation', 'pending_open'].includes(reason) ? 'pending' : linked ? 'active' : undefined)),
         event.message_id && imageCount > 0 && h('div', { className: 'hnu-stack', style: { marginTop: 8 } },
           Array.from({ length: imageCount }, (_, index) => h(MessageImage, { key: index, event, index }))),
         h('details', { open: selection.anchor === id, onToggle: e => {
@@ -471,6 +495,7 @@ window.__ModuleLoader__.load({
         h('summary', null, titleOf(event)),
         h('div', { className: 'hnu-stack' },
           h(Source, { event, groups }),
+          event.proposal && h(OpeningReview, { proposal: event.proposal, groupId: event.group_id, act, openTicket }),
           h('div', { className: 'hnu-row' },
             linked && button('打开工单', () => openTicket(linked, event.group_id)),
             selectable && button('开单', () => setAction(action === 'open' ? '' : 'open')),
@@ -555,7 +580,7 @@ window.__ModuleLoader__.load({
       ordinary: chats.filter(chat => !pinnedGroup(chat) && !inAssistant(chat)) })
     const groupSettings = (chat, saved) => saved.find(group => group.id === chatKey(chat)) ?? {
       id: chatKey(chat), name: chat.name, version: 0, enabled: false, roles: chat.kind === 'private' ? [] : ['owner', 'admin'],
-      senders: chat.kind === 'private' ? [chat.id] : [], keywords: [], mode: 'observe',
+      senders: chat.kind === 'private' ? [chat.id] : [], mode: 'observe',
     }
     function findChat(chats, key) {
       const recent = chats.filter(chat => chat.recent)
@@ -568,27 +593,30 @@ window.__ModuleLoader__.load({
     }
     function GroupForm({ group, save, show, compact = false }) {
       const isPrivate = group.id.startsWith('private:')
-      const [draft, set] = useState(() => ({ ...group, roles: group.roles || ['owner', 'admin'],
-        sendersText: (group.senders || []).map(sender => typeof sender === 'string' ? sender : sender.id).join('，'),
-        keywordsText: (group.keywords || []).join('，') }))
+      const [draft, set] = useState(() => ({ ...group, ttlMinutes: group.ttlMinutes ?? 30, roles: group.roles || ['owner', 'admin'],
+        sendersText: (group.senders || []).map(sender => typeof sender === 'string' ? sender : sender.id).join('，') }))
+      const [listen, setListen] = useState(null)
+      const enabled = listen?.wasEnabled === group.enabled ? listen.enabled : group.enabled
       const update = (key, value) => set(old => ({ ...old, [key]: value }))
       return h('form', { className: 'hnu-card hnu-stack', onSubmit: async e => {
         e.preventDefault()
-        await save('groups', { id: String(draft.id), name: draft.name, enabled: draft.enabled,
-          mode: draft.mode || 'observe', roles: draft.roles, senders: split(draft.sendersText), keywords: split(draft.keywordsText), version: draft.version ?? 0 })
+        await save('groups', { id: String(draft.id), name: draft.name, enabled, wasEnabled: group.enabled,
+          mode: draft.mode || 'observe', ttlMinutes: Number(draft.ttlMinutes), roles: draft.roles,
+          senders: split(draft.sendersText), version: draft.version ?? 0 })
       } },
         !compact && h('div', { className: 'hnu-row hnu-between' },
-          h('h3', null, group.name || '群 ' + group.id), pill(group.enabled ? status(group.mode) : '监听已关闭')),
+          h('h3', null, group.name || '群 ' + group.id), pill(group.enabled ? '监听中' : '监听已关闭')),
         h('div', { className: 'hnu-form' },
           h('label', null, isPrivate ? '会话备注' : '群备注', h('input', { value: draft.name || '', onChange: e => update('name', e.target.value), maxLength: 80 })),
-          h('label', { className: 'hnu-check' }, h('input', { type: 'checkbox', checked: Boolean(draft.enabled), onChange: e => update('enabled', e.target.checked) }), isPrivate ? '监听此会话' : '监听此群'),
-          h('label', null, '接单模式', h('select', { value: draft.mode === 'auto' ? 'auto' : 'observe', onChange: e => update('mode', e.target.value) },
-            h('option', { value: 'observe' }, '仅观察'), h('option', { value: 'auto' }, '自动接单'))),
+          h('label', { className: 'hnu-check' }, h('input', { type: 'checkbox', checked: enabled,
+            onChange: e => setListen({ wasEnabled: group.enabled, enabled: e.target.checked }) }), isPrivate ? '监听此会话' : '监听此群'),
+          h('label', null, '监听时长（分钟）', h('input', { type: 'number', min: 1, max: 1440, step: 1,
+            required: true, value: draft.ttlMinutes, onChange: e => update('ttlMinutes', e.target.value) })),
+          group.enabled && h('span', { className: 'hnu-muted' }, timeOf(group.expiresAt) + ' 自动关闭 · 开单需人工审核'),
           !isPrivate && h('div', { className: 'hnu-row', 'aria-label': '默认允许的角色' }, ...['owner', 'admin'].map(role =>
             h('label', { key: role, className: 'hnu-check' }, h('input', { type: 'checkbox', checked: draft.roles.includes(role), onChange: e =>
               update('roles', e.target.checked ? [...draft.roles, role] : draft.roles.filter(item => item !== role)) }), '允许' + roleNames[role] + '发起'))),
-          h('label', null, '指定发起人 QQ 号', h('input', { value: draft.sendersText, onChange: e => update('sendersText', e.target.value), placeholder: '多个 QQ 号用逗号分隔' })),
-          h('label', null, '触发关键词', h('input', { value: draft.keywordsText, onChange: e => update('keywordsText', e.target.value), placeholder: '可选，多个词用逗号分隔' }))),
+          h('label', null, '指定发起人 QQ 号', h('input', { value: draft.sendersText, onChange: e => update('sendersText', e.target.value), placeholder: '多个 QQ 号用逗号分隔' }))),
         h('div', { className: 'hnu-row' }, h('button', { className: 'hnu-primary' }, '保存会话设置'),
           show && button(isPrivate ? '查看私聊' : '查看群消息', () => show(String(group.id)), { className: 'hnu-quiet' })))
     }
@@ -626,7 +654,7 @@ window.__ModuleLoader__.load({
       h('summary', null,
         h('span', { className: 'hnu-permission-name', title: chat.name }, chat.name),
         pill(group.enabled ? '监听中' : '未监听', group.enabled ? 'active' : undefined),
-        h('span', { className: 'hnu-muted' }, status(group.mode || 'observe')),
+        h('span', { className: 'hnu-muted' }, group.enabled ? '人工审核' : '—'),
         h('span', { className: 'hnu-muted' }, group.enabled && roles.length > 0 && h('span', { className: 'hnu-permission-roles' }, roles.join('、') + ' · '), permission)),
       visited && h(GroupForm, { key: group.version, group, save, show, compact: true }))
     }
@@ -773,7 +801,7 @@ window.__ModuleLoader__.load({
           connection?.user_id && h('p', { className: 'hnu-muted' }, [connection.nickname, 'QQ ' + connection.user_id].filter(Boolean).join(' · ')),
           !setupOnly && h('div', { className: 'hnu-row' },
             pill(last ? '最近收信 ' + last : '尚无收件'),
-            pill(state.candidate || '候选提取等待中'),
+            pill(state.candidate || '等待 DSSA 评估'),
             pill(state.dispatch?.available ? '派工可用' : '派工暂不可用')),
           h('div', { className: 'hnu-row' },
             canRefreshQr && button('换一个二维码', changeQr, { className: 'hnu-primary', disabled: connecting }),
@@ -803,7 +831,7 @@ window.__ModuleLoader__.load({
           h('form', { className: 'hnu-form', onSubmit: async e => {
             e.preventDefault()
             if (await act('groups', { id: groupId.trim(), name: name.trim() || '群 ' + groupId.trim(),
-              enabled: false, mode: 'observe', roles: ['owner', 'admin'], senders: [], keywords: [], version: 0 })) {
+              enabled: false, mode: 'observe', roles: ['owner', 'admin'], senders: [], version: 0 })) {
               setGroupId('')
               setName('')
             }
@@ -1120,6 +1148,12 @@ window.__ModuleLoader__.load({
       }
       const id = chat.kind === 'group' ? chat.id : 'private:' + chat.id
       const stored = new Map((state.events || []).filter(event => event.group_id === id).map(event => [String(event.message_id), event]))
+      for (const proposal of state.proposals || []) {
+        const event = proposal.evidence
+        if (event.group_id === id && !stored.has(String(event.message_id))) {
+          stored.set(String(event.message_id), { ...event, reason: 'pending_open', proposal })
+        }
+      }
       const source = selection.locate && state.tickets.find(ticket => eventKey(ticket.evidence) === selection.locate)?.evidence
       if (source?.group_id === id && !stored.has(String(source.message_id))) stored.set(String(source.message_id), source)
       const messages = rows.map(row => {
@@ -1155,6 +1189,7 @@ window.__ModuleLoader__.load({
       const chat = findChat(available, chatId)
       const group = chat && groupSettings(chat, state.groups)
       const tickets = chat ? state.tickets.filter(ticket => ticket.evidence?.group_id === chatKey(chat)) : []
+      const proposals = chat ? (state.proposals || []).filter(item => item.evidence.group_id === chatKey(chat)) : []
       const expandedTicket = selection.ticket === null ? null : tickets.find(ticket => ticket.id === selection.ticket) ?? tickets[0]
       function choose(item) {
         select({ view: 'board', group: chatKey(item), anchor: '', ticket: '', locate: '', list: tab === 'settings' ? 'messages' : tab })
@@ -1187,10 +1222,12 @@ window.__ModuleLoader__.load({
               [['messages', '消息'], ['tickets', '工单'], ['settings', '会话设置']].map(([id, label]) =>
                 button(label, () => select({ list: id, locate: '' }), { key: id, className: 'hnu-quiet', 'aria-pressed': tab === id }))),
             tab === 'settings' ? h(GroupForm, { key: group.id + ':' + group.version, group, save: act })
-              : tab === 'tickets' ? (tickets.length ? tickets.map(ticket => h(BoardTicket, {
-              key: ticket.id, ctx, ticket, groups: [group], events: state.events, select, act, openNative,
-              expanded: ticket === expandedTicket, selected: selection.ticket === ticket.id,
-            })) : h('p', { className: 'hnu-muted' }, '此会话暂无工单'))
+              : tab === 'tickets' ? h(Fragment, null,
+                proposals.map(proposal => h(OpeningReview, { key: proposal.eventId, proposal, groupId: group.id, act, openTicket,
+                  showSource: () => select({ list: 'messages', anchor: proposal.eventId, locate: proposal.eventId }) })),
+                tickets.map(ticket => h(BoardTicket, { key: ticket.id, ctx, ticket, groups: [group], events: state.events, select, act, openNative,
+                  expanded: ticket === expandedTicket, selected: selection.ticket === ticket.id })),
+                !proposals.length && !tickets.length && h('p', { className: 'hnu-muted' }, '此会话暂无工单'))
               : h(QQHistory, { key: chatKey(chat), chat, state, selection, select, act, openTicket,
                 initialPage: cachedHistory?.account === account && cachedHistory?.group === chatKey(chat) ? cachedHistory.page : undefined }))
             : h('p', { className: 'hnu-muted' }, '连接 QQ 后选择一个会话')))

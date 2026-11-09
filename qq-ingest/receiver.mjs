@@ -3,12 +3,20 @@ import { createServer } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 
 const maxBody = 128 * 1024
+export const defaultListenMinutes = 30
+export const maxListenMinutes = 1440
 const positiveId = /^[1-9][0-9]{0,19}$/
 const messageId = /^-?[1-9][0-9]{0,19}$/
 const asId = (value, format = positiveId) =>
   (typeof value === 'string' || Number.isSafeInteger(value)) && format.test(String(value)) ? String(value) : undefined
 const signatureOf = (token, body) => 'sha1=' + createHmac('sha1', token).update(body).digest('hex')
 const digest = body => createHash('sha256').update(body).digest('hex')
+
+function effectiveGroup(value, now = Date.now()) {
+  const ttlMinutes = value.ttlMinutes ?? defaultListenMinutes
+  const expiresAt = value.expiresAt ?? (value.enabledAt ? value.enabledAt + ttlMinutes * 60_000 : null)
+  return { ...value, ttlMinutes, expiresAt, enabled: Boolean(value.enabled && expiresAt > now) }
+}
 
 export function openQueue(path) {
   const db = new DatabaseSync(path)
@@ -63,9 +71,9 @@ export function openQueue(path) {
     WHERE events.fingerprint <> excluded.fingerprint`)
   const account = () => db.prepare('SELECT account FROM connection WHERE singleton = 1').get()?.account
   const group = db.prepare('SELECT value FROM account_groups WHERE account = ? AND id = ?')
-  const loadGroup = (id, self = account()) => {
+  const loadGroup = (id, self = account(), now = Date.now()) => {
     const row = group.get(self ?? '', id)
-    return row && JSON.parse(row.value)
+    return row && effectiveGroup(JSON.parse(row.value), now)
   }
   const view = row => row && ({ ...row, attachments: JSON.parse(row.attachments), received_at: row.received_at ?? row.created_at * 1000 })
   return {
@@ -84,26 +92,29 @@ export function openQueue(path) {
         .run(id, id)
     },
     groups: () => db.prepare('SELECT value FROM account_groups WHERE account = ? ORDER BY rowid').all(account() ?? '')
-      .map(row => JSON.parse(row.value)),
-    saveGroup(input) {
+      .map(row => effectiveGroup(JSON.parse(row.value))),
+    saveGroup({ wasEnabled, ...input }) {
       db.exec('BEGIN IMMEDIATE')
       try {
         const currentAccount = account()
         if (!currentAccount) throw Object.assign(new Error('请先登录 QQ'), { status: 409 })
-        const previous = loadGroup(input.id)
-        if ((previous?.version ?? 0) !== input.version) {
+        const now = Date.now()
+        const previous = loadGroup(input.id, currentAccount, now)
+        if ((previous?.version ?? 0) !== input.version || Boolean(previous?.enabled) !== wasEnabled) {
           throw Object.assign(new Error('群设置已更新，请刷新'), { status: 409 })
         }
-        const now = Date.now()
+        const ttlMinutes = input.ttlMinutes ?? previous?.ttlMinutes ?? defaultListenMinutes
+        if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > maxListenMinutes) {
+          throw Object.assign(new Error('监听时长必须为 1 至 1440 分钟'), { status: 400 })
+        }
+        const renewing = input.enabled && (!previous?.enabled || previous.ttlMinutes !== ttlMinutes)
         const value = {
           ...input,
           mode: input.enabled && !previous?.enabled ? 'observe' : input.mode,
           version: input.version + 1,
           enabledAt: input.enabled ? previous?.enabled ? previous.enabledAt : now : null,
-          autoSince: null,
-        }
-        if (value.enabled && value.mode === 'auto') {
-          value.autoSince = previous?.enabled && previous.mode === 'auto' ? previous.autoSince : now
+          ttlMinutes,
+          expiresAt: input.enabled ? renewing ? now + ttlMinutes * 60_000 : previous.expiresAt : null,
         }
         db.prepare('INSERT INTO account_groups VALUES (?, ?, ?) ON CONFLICT(account, id) DO UPDATE SET value = excluded.value')
           .run(currentAccount, input.id, JSON.stringify(value))
@@ -136,6 +147,11 @@ export function openQueue(path) {
         reply_to, name, role, attachments, received_at FROM events
         WHERE id LIKE ? AND rowid < ? AND (? IS NULL OR group_id = ?) ORDER BY rowid DESC LIMIT ?`)
         .all((account() ?? '') + ':%', before, groupId, groupId, limit).map(view)
+    },
+    discussion(event, limit) {
+      return db.prepare(`SELECT id, group_id, message_id, actor, sent_at, received_at, text, status, reply_to, name, role, attachments
+        FROM events WHERE group_id = ? AND id LIKE ? AND rowid <= (SELECT rowid FROM events WHERE id = ?)
+        ORDER BY rowid DESC LIMIT ?`).all(event.group_id, (account() ?? '') + ':%', event.id, limit).map(view).reverse()
     },
     unsent: () => db.prepare(`SELECT id, raw FROM events WHERE id LIKE ? AND forwarded = 0
       AND group_id NOT LIKE 'private:%' AND status <> 'conflict' AND message_id IS NOT NULL AND actor IS NOT NULL ORDER BY rowid LIMIT 25`)

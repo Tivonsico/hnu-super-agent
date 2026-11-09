@@ -46,12 +46,13 @@ test('DSSA managed agent tools deny shell, network and arbitrary file reads', ()
   assert.equal(denyManagedTool({ agent: { id: 'worker-fixture' }, name: 'hnu_write_outline' }), undefined)
 })
 
-test('the router can only accept or ignore explicitly confirmed QQ requests', () => {
+test('the router can ignore QQ requests and only accept explicitly confirmed ones', () => {
   const agent = { id: 'orchestrator-fixture' }
   const route = (kind, trigger_id) => denyManagedTool({
     agent, name: 'orchestrator_route', arguments: { decisions: [{ kind, trigger_id }] },
   })
   assert.equal(route('accept', 'hnu-qq:100:200:123:manual'), undefined)
+  assert.equal(route('ignore', 'hnu-qq:100:200:123'), undefined)
   assert.match(route('accept', 'hnu-qq:100:200:123'), /operator-confirmed/)
   assert.match(route('attach', 'hnu-qq:100:200:123:manual'), /operator-confirmed/)
   assert.match(route('stop', 'hnu-qq:100:200:123:manual'), /operator-confirmed/)

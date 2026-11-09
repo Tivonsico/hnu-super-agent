@@ -75,12 +75,6 @@ writeFileSync(join(profileDir, 'cordis.patch.yml'), `- id: webserver
 `)
 const noticeData = join(state, 'notice-data')
 mkdirSync(noticeData)
-const rules = { version: 1, rules: [{
-  id: 'hnu-action', enabled: true, scope: '*', priority: 0,
-  match: { regex: ['(?:请|需要|帮忙|准备|提交|整理|完成|起草|撰写|征文|通知)'] },
-  action: { action: 'task', payload: { category: 'action' } },
-}] }
-writeFileSync(join(noticeData, 'rules.json'), JSON.stringify(rules, null, 2) + '\n')
 writeFileSync(join(state, 'notice.env'), '', { mode: 0o600 })
 writeFileSync(join(state, 'fixture.json'), JSON.stringify({ port, profile, home, launcher, noticeData, root }, null, 2) + '\n')
 console.log(state)

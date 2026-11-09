@@ -3,11 +3,10 @@
 HNU Super Agent 是一个运行在本机的 QQ 群事务台。打开 HNU Agent 后，可以选群、设置谁能发起任务、查看消息和工单，并在具体会话里补充要求或审核交付。当前流程可以根据一条符合条件的群消息准备 Markdown 提纲。QQ 接入以读取消息为主，工单交付留在本机。
 
 ```text
-NapCatQQ → OneBot 收件端 → 群务台候选 → HNU 发起权限 → DSSA 工单 → DSH Worker
-              └────────────────── 原始消息、工单、会话与交付 ──────────────────→ HNU 界面
+NapCatQQ → OneBot 收件端 → HNU 会话监听与权限 → DSSA 评估 → 人工审核 → DSSA 工单 → DSH Worker
 ```
 
-NapCatQQ 负责读取 QQ，群务台（notice-hub）提取候选。HNU 对照原文和群权限决定哪些候选能交给 DSSA。DSSA 创建工单并派工，DSH 运行 Worker 会话。HNU 维护消息、工单、会话和交付之间的关联。读取某个群的消息和允许该群成员触发工单是两项设置。
+NapCatQQ 负责读取 QQ。HNU 仅在会话监听期间将有发起权限的人发出的新消息送给 DSSA，DSSA 根据讨论判断是否有任务。用户批准开单后，DSSA 创建工单并派工，DSH 运行 Worker 会话。群务台（notice-hub）提供群收件和附件支持。
 
 ## 开发环境
 
@@ -46,14 +45,14 @@ HNU_DSSA_GITHUB_REPO=你的账号/你的开发仓库 node dsh/start.mjs
 
 启动器默认从 `/Applications/DeepSeek Harness.app` 找 DSH。DSH 安装在别处时，通过 `HNU_DSH` 指定兼容版本的可执行文件。已配置的本机环境也可以双击 [启动 HNU Agent.command](<启动 HNU Agent.command>)。
 
-在 HNU 主界面连接 QQ，选中要监听的群。首次打开监听时进入「仅观察」。确认发起权限后再开启自动接单。可浏览的 QQ 会话与允许触发工单的群分别管理。NapCat 的本机接入和可选桌面脚本见 [QQ 接入说明](docs/local-verification.md)。
+在 HNU 主界面连接 QQ，进入「会话设置」，设置发起权限并开启监听。监听默认 30 分钟，可以修改。到期后停止送评，已生成的开单建议仍可在「工单」审核。NapCat 的本机接入和可选桌面脚本见 [QQ 接入说明](docs/local-verification.md)。
 
 ## 代码放在哪里
 
 | 目录 | 职责 |
 | --- | --- |
 | `dsh/` | 启动 HNU，装配 DSH profile，管理本地进程。包含可选的桌面 QQ 接入脚本。 |
-| `plugins/hnu-companion/` | QQ 工单接入插件及 HNU 界面。连接群务台候选、DSSA 工单和 DSH 会话。 |
+| `plugins/hnu-companion/` | QQ 工单接入插件及 HNU 界面。处理送评、开单审批、DSSA 工单和 DSH 会话。 |
 | `qq-ingest/` | OneBot HTTP 收件、去重和本地队列。 |
 | `hnu/` | 工单工作目录、文件交付和版本审批。 |
 | `tests/` | 事件接收、权限、文件交付和审批的本地回归。 |

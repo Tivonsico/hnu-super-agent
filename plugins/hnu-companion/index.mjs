@@ -2,23 +2,23 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
-import { openQueue } from '../../qq-ingest/receiver.mjs'
+import { maxListenMinutes, openQueue } from '../../qq-ingest/receiver.mjs'
 import { openReviews } from '../../hnu/reviews.mjs'
 import { documentWork } from '../../hnu/document-work.mjs'
 import { bindExecution } from './execution.mjs'
-import { readCandidates, sourceId } from './candidates.mjs'
+import { bindApprovals } from './approval.mjs'
 import { napcatRequest, qqImage } from './napcat.mjs'
 
 export const inject = ['orchestrator', 'webServer', 'sessionController', 'credentials', 'workspaceRegistry']
 const sourceName = 'hnu-qq'
-const autoScope = '为这条消息中明确提出的校园写作任务生成一份 Markdown 提纲。只使用本工单原文和已授权资料。'
-const followup = /(?:续办|追加|上(?:一|个|次)工单|工单\s*#|ticket\s*#)/i
 const qqId = z.string().regex(/^[1-9][0-9]{0,19}$/)
 const conversationId = z.string().regex(/^(?:private:)?[1-9][0-9]{0,19}$/)
 const groupInput = z.object({
   id: conversationId, name: z.string().trim().min(1).max(100), enabled: z.boolean(),
   mode: z.enum(['observe', 'auto']), roles: z.array(z.enum(['owner', 'admin'])).max(2),
-  senders: z.array(qqId).max(100), keywords: z.array(z.string().trim().min(1).max(60)).max(30),
+  senders: z.array(qqId).max(100),
+  ttlMinutes: z.number().int().min(1).max(maxListenMinutes).optional(),
+  wasEnabled: z.boolean(),
   version: z.number().int().nonnegative(),
 })
 const ticketId = z.string().min(1).max(120)
@@ -70,6 +70,22 @@ const sourceKind = queue => ({
       ? { listened: true, observed: true, row: meta.group }
       : { listened: false, reason: 'qq_group_not_listed' }
   },
+  threadContext: {
+    messageId: trigger => trigger.meta.eventId,
+    async read(_commands, trigger, part) {
+      const event = queue.get(trigger.meta.eventId)
+      if (!currentEvent(queue, event?.id)) return { messages: [], body: { messages: [] } }
+      const group = queue.group(event.group_id)
+      if (!assessable(event, group)) return { messages: [], body: { messages: [] } }
+      const parent = event.reply_to && queue.get(event.id.slice(0, event.id.lastIndexOf(':') + 1) + event.reply_to)
+      const rows = part === 'parent' ? [parent] : part === 'root' ? [event] : [...new Map([
+        ...(parent ? [parent] : []), ...queue.discussion(event, 16),
+      ].map(row => [row.id, row])).values()]
+      const messages = rows.filter(row => assessable(row, group)).map(row => ({ id: row.id, from: row.name || row.actor,
+        at: new Date(row.sent_at * 1000).toISOString(), text: row.text.slice(0, 6000) || '消息含图片附件' }))
+      return { messages, body: { messages }, status: 'chat_neighbours' }
+    },
+  },
 })
 
 function evidence(event) {
@@ -79,36 +95,42 @@ function evidence(event) {
 }
 
 function eligible(event, group) {
-  return Boolean(group?.enabled && event?.actor && (group.senders.includes(event.actor) || group.roles.includes(event.role))
-    && (!group.keywords.length || group.keywords.some(word => event.text.includes(word))))
+  return Boolean(group && event?.actor && (group.senders.includes(event.actor) || group.roles.includes(event.role)))
 }
 
-function makeTrigger(event, candidate, grant) {
+function assessable(event, group, previouslyAssessed = false) {
+  if (!previouslyAssessed && (!group?.enabled || event?.received_at < group.enabledAt)) return false
+  return eligible(event, group) && event.status !== 'conflict' && Boolean(event.message_id && event.sent_at
+    && (event.text || event.attachments?.some(item => item.type === 'image')))
+}
+
+function makeTrigger(event, grant) {
   const ref = { source: sourceName, id: event.id }
   return {
     id: `${sourceName}:${event.id}${grant ? ':manual' : ''}`, source: sourceName, threads: [ref],
     actor: { source: sourceName, id: event.actor || 'qq-unknown' }, human: true,
     at: new Date(event.sent_at ? event.sent_at * 1000 : event.received_at).toISOString(),
-    text: grant ? `本机用户确认的执行范围：${grant.scope}\n\nQQ 原文：\n${event.text}` : event.text,
-    meta: { group: event.group_id, eventId: event.id, noticeHubTask: candidate?.id,
-      manual: Boolean(grant), scope: grant?.scope ?? autoScope, materialIds: grant?.materialIds ?? [] },
+    text: grant ? `本机用户确认的执行范围：${grant.scope}\n\nQQ 原文：\n${event.text}` : event.text || 'QQ 消息含图片附件',
+    meta: { group: event.group_id, eventId: event.id,
+      manual: Boolean(grant), ...(grant ? { scope: grant.scope } : {}), materialIds: grant?.materialIds ?? [] },
   }
 }
 
-function bindPolicy(runtime, queue, reviews) {
+function bindPolicy(runtime, queue, reviews, approvals) {
   const options = runtime.engine.options
   const original = options.policy
-  function automatic(event, group) {
-    return eligible(event, group) && group.mode === 'auto' && group.autoSince !== null
-      && event.received_at >= group.autoSince
+  function canAssess(trigger, previouslyAssessed = false) {
+    const event = queue.get(trigger.meta.eventId)
+    const settings = runtime.store.settings().eval
+    return currentEvent(queue, event?.id) && settings.mode !== 'off' && Boolean(settings.model)
+      && assessable(event, queue.group(event.group_id), previouslyAssessed) && !reviews.linked(event.id)
+      && trigger.meta.manual === Boolean(reviews.manualRequest(event.id))
   }
   function authorized(event, trigger) {
     if (!currentEvent(queue, event?.id) || event.status === 'conflict' || runtime.store.settings().eval.mode === 'off' || !runtime.store.settings().eval.model) return false
-    if (trigger.meta.manual) return Boolean(reviews.manualRequest(event.id))
-    if (reviews.manualRequest(event.id) || reviews.linked(event.id)) return false
     const ticket = runtime.store.tickets.list().find(item => item.origin.triggerId === trigger.id)
-    if (ticket && reviews.inputs(ticket.id).some(input => input.event && queue.get(input.event)?.status === 'conflict')) return false
-    return Boolean(ticket && reviews.ownerContinued(ticket.id)) || event.status === 'verified' && automatic(event, queue.group(event.group_id))
+    if (!ticket || reviews.inputs(ticket.id).some(input => input.event && queue.get(input.event)?.status === 'conflict')) return false
+    return !trigger.meta.manual || Boolean(reviews.manualRequest(event.id))
   }
   let ownerResume
   options.policy = function () {
@@ -117,8 +139,11 @@ function bindPolicy(runtime, queue, reviews) {
       ...base,
       gate(trigger, thread, tickets) {
         if (trigger.source !== sourceName) return base.gate(trigger, thread, tickets)
-        if (trigger.meta.panel || !authorized(queue.get(trigger.meta.eventId), trigger)) return { admissible: false, reason: 'not_a_member' }
-        return { admissible: true, strength: trigger.meta.manual ? 'explicit' : 'inferred',
+        const approval = approvals.get(trigger.meta.eventId)
+        const approved = approval?.status === 'approve' && approval.triggerId === trigger.id
+        if (trigger.meta.panel || !canAssess(trigger, approved)) return { admissible: false, reason: 'not_a_member' }
+        const explicit = trigger.meta.manual || approved
+        return { admissible: true, strength: explicit ? 'explicit' : 'inferred',
           basis: { source: sourceName, scope: trigger.meta, row: trigger.meta.group, via: 'followup' } }
       },
       revalidate(mandate) {
@@ -127,13 +152,12 @@ function bindPolicy(runtime, queue, reviews) {
         if (!meta) return false
         const event = queue.get(meta.eventId)
         if (!currentEvent(queue, event?.id) || event.status === 'conflict') return false
-        if (meta.eventId === ownerResume || meta.manual && reviews.manualRequest(meta.eventId)) return true
-        return automatic(event, queue.group(event.group_id))
+        return !meta.manual || meta.eventId === ownerResume || Boolean(reviews.manualRequest(meta.eventId))
       },
     }
   }
   return {
-    authorized, automatic,
+    authorized, canAssess,
     asOwner(event, execute) {
       ownerResume = event
       try { return execute() } finally { ownerResume = undefined }
@@ -167,8 +191,8 @@ function workspace(runtime, queue, reviews, policy, source) {
     else act()
     runtime.passes.request()
   }
-  function receive(event, candidate, grant) {
-    const trigger = makeTrigger(event, candidate, grant)
+  function receive(event, grant) {
+    const trigger = makeTrigger(event, grant)
     if (!source.triggers.get(trigger.id)) return source.receive(trigger)
   }
   return { origin, owns, tickets, ticketFor, attach, receive }
@@ -248,7 +272,7 @@ async function saveModel(ctx, value) {
   return result
 }
 
-function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
+function registerApi(ctx, config, queue, reviews, work, source, desk, state, approvals) {
   const web = ctx.webServer
   let modelUpdate = Promise.resolve()
   const session = createHmac('sha256', config.reviewerKey).update(randomBytes(32)).digest('hex')
@@ -347,7 +371,18 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
           modelUpdate = update.catch(() => {})
           return respond(200, await update)
         }
-        const display = event => ({ ...event, reason: state.reasons.get(event.id) ?? 'awaiting_candidate', ticket: desk.ticketFor(event.id) })
+        const publicProposal = ({ eventId, version, title, scope, reason }) => ({ eventId, version, title, scope,
+          reason: typeof reason === 'string' ? reason : undefined })
+        const display = event => {
+          const proposal = approvals.get(event.id)
+          const ticket = desk.ticketFor(event.id)
+          const pending = !ticket && proposal?.status === 'pending' && event.status !== 'conflict'
+          const listening = queue.group(event.group_id)
+          const reason = ticket ? 'dssa' : pending ? 'pending_open' : proposal?.status === 'reject' ? 'open_rejected'
+            : listening?.enabled && event.received_at >= listening.enabledAt ? state.reasons.get(event.id) ?? 'ordinary' : 'ordinary'
+          return { ...event, reason, ticket,
+            ...(pending ? { proposal: publicProposal(proposal) } : {}) }
+        }
         if (req.method === 'GET' && path === 'messages') {
           const before = z.coerce.number().int().positive().safeParse(url.searchParams.get('before'))
           const group = url.searchParams.get('group')
@@ -367,9 +402,11 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
             })),
           }))
           const newest = queue.page(Number.MAX_SAFE_INTEGER, null, 51)
+          const proposals = approvals.pending(queue.account()).map(proposal => ({ ...publicProposal(proposal),
+            evidence: evidence(queue.get(proposal.eventId)) })).filter(proposal => proposal.evidence && proposal.evidence.status !== 'conflict')
           const events = newest.slice(0, 50).map(display)
           return respond(200, { groups, events, next: newest.length > 50 ? newest[49].cursor : null, tickets, account: queue.account(), availableGroups: state.groups?.account === queue.account() ? state.groups.list : [], connection: queue.health(),
-            collection: state.collection, candidate: state.candidate, dispatch: {
+            collection: state.collection, candidate: state.candidate, proposals, dispatch: {
               available: source.configured() && ctx.orchestrator.store.settings().eval.mode !== 'off' && Boolean(ctx.orchestrator.store.settings().eval.model),
               reason: '收件可用，DSSA 派工暂不可用',
               model: ctx.orchestrator.store.settings().eval.model?.model,
@@ -396,22 +433,27 @@ function registerApi(ctx, config, queue, reviews, work, source, desk, state) {
         if (path === 'groups') {
           if (queue.account() !== data.account) return respond(409, { error: 'QQ 账号已切换，请刷新群设置' })
           const input = groupInput.parse(data)
-          if (input.id.startsWith('private:') && input.enabled && input.mode === 'auto' && !input.keywords.length) {
-            return respond(400, { error: '私聊自动接单需要至少一个触发关键词' })
-          }
           return respond(200, queue.saveGroup(input))
+        }
+        if (path === 'approve-open') {
+          const input = z.object({ eventId, version: z.string().min(1).max(120), action: z.enum(['approve', 'reject']) }).parse(data)
+          if (!currentEvent(queue, input.eventId) || queue.account() !== data.account) return respond(409, { error: 'QQ 账号已切换，请刷新' })
+          const result = approvals.decide(input.eventId, input.version, input.action)
+          ctx.orchestrator.passes.request()
+          return respond(200, { ticket: result.ticket })
         }
         if (path === 'open') {
           const input = z.object({ eventId, scope: text, materialIds: z.array(z.string().max(80)).max(10).default([]) }).parse(data)
           const existing = desk.ticketFor(input.eventId)
           if (existing) return respond(200, { ticket: existing })
           const event = queue.get(input.eventId)
-          if (!currentEvent(queue, event?.id) || !(event?.text || event?.attachments?.some(item => item.type === 'image')) || event.status === 'conflict' || !queue.group(event.group_id)?.enabled) {
-            return respond(409, { error: '请先确认原消息，并开启来源群监听' })
+          if (!currentEvent(queue, event?.id) || !assessable(event, queue.group(event.group_id))) {
+            return respond(409, { error: '请确认来源消息、会话监听和发起人权限' })
           }
+          if (approvals.get(event.id)) return respond(409, { error: '这条消息已有评估结果，请刷新查看' })
           if (input.materialIds.some(id => !Object.hasOwn(config.materials ?? {}, id))) return respond(400, { error: '选定资料不存在' })
           reviews.request(event.id, input.scope, input.materialIds)
-          if (source.configured() && ctx.orchestrator.store.settings().eval.mode !== 'off' && Boolean(ctx.orchestrator.store.settings().eval.model)) await desk.receive(event, null, reviews.manualRequest(event.id))
+          if (source.configured() && ctx.orchestrator.store.settings().eval.mode !== 'off' && Boolean(ctx.orchestrator.store.settings().eval.model)) await desk.receive(event, reviews.manualRequest(event.id))
           return respond(202, { queued: true })
         }
         const id = ticketId.parse(data.ticket)
@@ -469,8 +511,8 @@ export function apply(ctx) {
   ctx.effect(() => {
     const queue = openQueue(config.queue)
     const controller = new AbortController()
-    const state = { reasons: new Map(), collection: '等待收件', candidate: '等待群务台', error: null }
-    let reviews, policy, unbind, unregister, unregisterSource, source, desk, work
+    const state = { reasons: new Map(), collection: '等待收件', candidate: '等待 DSSA 评估', error: null }
+    let reviews, policy, approvals, unbind, unregister, unregisterSource, source, desk, work
     function workspaceTitle(ticket) {
       if (!desk.owns(ticket)) return
       const group = desk.origin(ticket).meta.group
@@ -481,6 +523,7 @@ export function apply(ctx) {
     function release() {
       unregister?.()
       unbind?.()
+      approvals?.dispose()
       policy?.dispose()
       unregisterSource?.()
       reviews?.close()
@@ -491,22 +534,18 @@ export function apply(ctx) {
       const kind = sourceKind(queue)
       unregisterSource = runtime.sources.register(kind)
       source = runtime.context(kind)
-      policy = bindPolicy(runtime, queue, reviews)
+      approvals = bindApprovals(runtime, (trigger, previouslyAssessed) => policy.canAssess(trigger, previouslyAssessed))
+      policy = bindPolicy(runtime, queue, reviews, approvals)
       desk = workspace(runtime, queue, reviews, policy, source)
       work = documentWork(config)
       unbind = bindExecution(runtime, work, reviews, queue, policy.authorized, config, workspaceTitle)
-      unregister = registerApi(ctx, config, queue, reviews, work, source, desk, state)
+      unregister = registerApi(ctx, config, queue, reviews, work, source, desk, state, approvals)
     } catch (error) {
       release()
       throw error
     }
 
     async function processMessages() {
-      let candidateError
-      const candidates = await readCandidates(config.noticeHubTasks, controller.signal).catch(error => {
-        candidateError = error.message
-        return new Map()
-      })
       if (controller.signal.aborted) return
       const dispatchReady = source.configured() && runtime.store.settings().eval.mode !== 'off' && Boolean(runtime.store.settings().eval.model)
       const account = queue.account()
@@ -522,39 +561,23 @@ export function apply(ctx) {
       const byEvent = new Map(tickets.map(ticket => [desk.origin(ticket).meta.eventId, ticket]))
       for (const event of events) {
         const group = queue.group(event.group_id)
-        const isPrivate = event.group_id.startsWith('private:')
-        const candidate = isPrivate
-          ? (group?.keywords.some(word => event.text.includes(word)) ? { id: event.id } : null)
-          : candidates.get(sourceId(event))
         const grant = reviews.manualRequest(event.id)
-        const trigger = makeTrigger(event, candidate, grant)
+        const trigger = makeTrigger(event, grant)
+        const proposal = approvals.get(event.id)
         const decisionId = runtime.store.triggers.disposition(trigger.id)?.decisionId
         const result = decisionId && runtime.store.decisions.get(decisionId)
         let reason
         if (byEvent.has(event.id) || reviews.linked(event.id)) reason = 'dssa'
         else if (event.status === 'conflict') reason = 'needs_confirmation'
-        else if (grant) {
-          reason = result?.kind === 'ignore' || result?.kind === 'unavailable' ? 'needs_confirmation' : 'queued'
-          if (dispatchReady && group?.enabled) await desk.receive(event, candidate, grant)
-        } else if (!group?.enabled) reason = 'group_disabled'
-        else if (event.status === 'reply') {
-          reason = 'needs_confirmation'
-          const originalId = event.id.slice(0, event.id.lastIndexOf(':')) + ':' + event.reply_to
-          const ticket = byEvent.get(originalId)
-          const original = queue.get(originalId)
-          const current = ticket && reviews.current(ticket.id)
-          if (candidate && ticket && current?.status === 'pending' && original?.actor === event.actor
-            && policy.automatic(event, group) && /^(?:请)?(?:修改|补充|调整)(?:这份|这篇|当前|同一份)?提纲/.test(event.text)) {
-            if (reviews.qqChange({ ticket: ticket.id, version: current.version, event: event.id, text: event.text }) === 'continued') reason = 'dssa'
-          }
-        } else if (event.status !== 'verified' || followup.test(event.text)) reason = 'needs_confirmation'
-        else if (result?.kind === 'ignore') reason = 'ordinary'
-        else if (!candidate || (!isPrivate && !event.forwarded)) reason = isPrivate || event.forwarded ? 'ordinary' : 'awaiting_candidate'
-        else if (!eligible(event, group)) reason = !event.role && !group.senders.includes(event.actor) ? 'needs_confirmation' : 'sender_not_allowed'
-        else if (!policy.automatic(event, group)) reason = 'observed'
+        else if (proposal?.status === 'pending') reason = 'pending_open'
+        else if (proposal?.status === 'reject') reason = 'open_rejected'
+        else if (!group?.enabled || event.received_at < group.enabledAt) reason = 'ordinary'
+        else if (!eligible(event, group)) reason = 'sender_not_allowed'
+        else if (!assessable(event, group) || result?.kind === 'unavailable') reason = 'needs_confirmation'
+        else if (result?.kind === 'ignore') reason = grant ? 'needs_confirmation' : 'ordinary'
         else {
-          reason = result?.kind === 'unavailable' ? 'needs_confirmation' : 'queued'
-          if (dispatchReady) await desk.receive(event, candidate)
+          reason = grant ? 'queued' : 'awaiting_candidate'
+          if (dispatchReady) await desk.receive(event, grant)
         }
         state.reasons.set(event.id, reason)
       }
@@ -588,8 +611,8 @@ export function apply(ctx) {
         }
       }
       state.collection = queue.health().last_report ? '已收到群消息' : '等待收件'
-      state.candidate = candidateError ? '候选提取暂不可用' : '候选提取可用'
-      state.error = candidateError ?? followupError ?? null
+      state.candidate = dispatchReady ? 'DSSA 评估可用' : 'DSSA 评估暂不可用'
+      state.error = followupError ?? null
       source.report(sourceName, { state: state.error ? 'error' : 'ready', detail: state.error ?? state.collection })
     }
     const running = (async () => {

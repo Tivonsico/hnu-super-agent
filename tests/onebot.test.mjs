@@ -52,6 +52,8 @@ test('signed group reports are acknowledged empty and deduplicated across a rest
 })
 
 test('saved group settings gate new messages and keep the signed sender role and attachment hint', async t => {
+  let now = Date.now()
+  t.mock.method(Date, 'now', () => now)
   const dir = mkdtempSync(join(tmpdir(), 'hnu-onebot-groups-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const writer = openQueue(join(dir, 'queue.sqlite'))
@@ -76,9 +78,11 @@ test('saved group settings gate new messages and keep the signed sender role and
   }
   await report('1', { user_id: 101, role: 'owner' })
   assert.equal(queue.events().length, 0)
-  const form = { id: '200', name: '群设置', version: 0, enabled: true, mode: 'auto', roles: ['owner'], senders: [], keywords: [] }
+  const form = { id: '200', name: '群设置', version: 0, enabled: true, wasEnabled: false, mode: 'auto', roles: ['owner'], senders: [] }
   const group = writer.saveGroup(form)
   assert.equal(group.mode, 'observe')
+  assert.equal(group.ttlMinutes, 30)
+  assert.equal(group.expiresAt, now + 30 * 60_000)
   assert.throws(() => writer.saveGroup(form), { status: 409 })
   await report('2', { user_id: 101, role: 'owner', card: '成员甲' })
   await report('3', { user_id: 999, role: 'owner' })
@@ -86,7 +90,16 @@ test('saved group settings gate new messages and keep the signed sender role and
   await report('8', { user_id: 101, role: 'owner' }, 100, 101, 'message_sent')
   assert.deepEqual(queue.events().map(item => item.message_id), ['2', '3', '7'])
   assert.deepEqual(queue.unsent().map(item => item.id), ['100:200:2', '100:200:3', '100:200:7'])
-  writer.saveGroup({ ...group, enabled: false })
+  now += 60_000
+  const updated = writer.saveGroup({ ...group, wasEnabled: true, ttlMinutes: 5 })
+  assert.equal(updated.enabledAt, group.enabledAt)
+  assert.equal(updated.expiresAt, now + 5 * 60_000)
+  now += 60_000
+  const renamed = writer.saveGroup({ ...updated, wasEnabled: true, name: '新群名' })
+  assert.equal(renamed.expiresAt, updated.expiresAt)
+  now = renamed.expiresAt
+  assert.equal(queue.groups()[0].enabled, false)
+  assert.throws(() => writer.saveGroup({ ...renamed, wasEnabled: true, name: '旧页面保存' }), { status: 409 })
   await report('4', { user_id: 101, role: 'owner' })
   await report('9', { user_id: 100, role: 'owner' }, 100, 100, 'message_sent')
   assert.deepEqual(queue.events().map(item => [item.message_id, item.role]), [['2', 'owner'], ['3', null], ['7', 'owner']])
@@ -106,7 +119,9 @@ test('saved group settings gate new messages and keep the signed sender role and
   writer.selectAccount('100')
   assert.equal(queue.group('200').enabled, false)
   assert.deepEqual(queue.events().map(item => item.message_id), ['2', '3', '7'])
-
+  const renewed = writer.saveGroup({ ...renamed, enabled: true, wasEnabled: false })
+  assert.equal(renewed.enabledAt, now)
+  assert.equal(renewed.expiresAt, now + 5 * 60_000)
 })
 
 test('signed private messages create evidence only for an opted-in conversation', async t => {
@@ -131,8 +146,8 @@ test('signed private messages create evidence only for an opted-in conversation'
   await send(1, 101)
   assert.deepEqual(queue.events(), [])
   assert.equal(queue.activity()['private:101'], time)
-  queue.saveGroup({ id: 'private:101', name: '联系人', enabled: true, mode: 'observe',
-    senders: ['101'], roles: [], keywords: [], version: 0 })
+  queue.saveGroup({ id: 'private:101', name: '联系人', enabled: true, wasEnabled: false, mode: 'observe',
+    senders: ['101'], roles: [], version: 0 })
   await send(2, 101)
   await send(3, 102)
   await send(4, 100, { post_type: 'message_sent', target_id: 101 })
