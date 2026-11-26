@@ -1,0 +1,2386 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" id="hnu-superagent-flow" version="1.1" width="5500" height="3280" viewBox="350 0 5500 3280" role="img" aria-labelledby="chart-title chart-desc" data-graph-schema="hnu-flow-graph/1">
+  <title id="chart-title">05 HNU Super Agent 总体流程图</title>
+  <desc id="chart-desc">全局新任务经模板打包和消息队列进入监听和取任务，队列输出使用橙色。指定合并、恢复已终止工单、恢复异常中断工单与反馈、终止均接工单补充／反馈入口；Router的归入已有工单连接此入口；Router内不再绘制恢复工单。Router、Worker、Dreamer向前端通知控件发送提示。右侧记忆和Note合并显示，用户编辑和Note写入保留，Dreamer改为整个模块的一条统一连接；删除操作日志图形。前端与Router内的同色线有白色描边。对象、独立端口、单向路径与跨线均在代码中明确。</desc>
+  <metadata id="hnu-graph">{
+  "schema": "hnu-flow-graph/1",
+  "coordinateSystem": "SVG根坐标，无外部变换",
+  "sourceSha256": "2d2a045b0413114b277af83712516d0efb4ef2eedfcd87fd90f37056873774f4",
+  "nodes": [
+    {
+      "id": "node-frontend",
+      "label": "前端",
+      "type": "module",
+      "members": [
+        "node-frontend",
+        "node-frontend-box",
+        "node-frontend-heading"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-sources",
+      "label": "消息来源",
+      "type": "module",
+      "members": [
+        "node-sources",
+        "node-sources-box",
+        "node-sources-heading"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-filter",
+      "label": "筛选 / 打包",
+      "type": "module",
+      "members": [
+        "node-filter",
+        "node-filter-box",
+        "node-filter-heading"
+      ],
+      "ports": [
+        "edge-filter-raw-storage-out"
+      ]
+    },
+    {
+      "id": "node-router",
+      "label": "Router（本质是 Agent）",
+      "type": "module",
+      "members": [
+        "node-router",
+        "node-router-box",
+        "node-router-heading",
+        "node-router-subheading"
+      ],
+      "ports": [
+        "edge-tickets-router-in",
+        "edge-contexts-router-in",
+        "edge-memories-router-in",
+        "edge-router-notification-out"
+      ]
+    },
+    {
+      "id": "node-db-left",
+      "label": "数据库（左侧视图）",
+      "type": "storage-view",
+      "members": [
+        "node-db-left",
+        "node-db-left-box",
+        "node-db-left-heading",
+        "node-db-left-subheading",
+        "node-db-left-footnote"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-db-right",
+      "label": "数据库（右侧视图）",
+      "type": "storage-view",
+      "members": [
+        "node-db-right",
+        "node-db-right-box",
+        "node-db-right-heading",
+        "node-db-right-subheading"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-dreamer",
+      "label": "Dreamer（记忆整理 Agent）",
+      "type": "module",
+      "members": [
+        "node-dreamer",
+        "node-dreamer-box",
+        "node-dreamer-heading",
+        "node-dreamer-subheading"
+      ],
+      "ports": [
+        "edge-dreamer-memories-out",
+        "edge-dreamer-notification-out"
+      ]
+    },
+    {
+      "id": "node-global-input",
+      "label": "全局输入：新任务",
+      "type": "process",
+      "members": [
+        "node-global-input",
+        "node-global-input-box",
+        "node-global-input-label"
+      ],
+      "ports": [
+        "edge-global-input-package-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-global-input-label"
+    },
+    {
+      "id": "node-view-tickets",
+      "label": "查看工单",
+      "type": "step",
+      "members": [
+        "node-view-tickets",
+        "node-view-tickets-box",
+        "node-view-tickets-label"
+      ],
+      "ports": [
+        "edge-tickets-frontend-in"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-view-tickets-label"
+    },
+    {
+      "id": "node-global-refresh",
+      "label": "刷新工单状态",
+      "type": "process",
+      "members": [
+        "node-global-refresh",
+        "node-global-refresh-box",
+        "node-global-refresh-label"
+      ],
+      "ports": [
+        "edge-refresh-ticket-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-global-refresh-label"
+    },
+    {
+      "id": "node-edit-skills",
+      "label": "编辑 Skills",
+      "type": "step",
+      "members": [
+        "node-edit-skills",
+        "node-edit-skills-box",
+        "node-edit-skills-label"
+      ],
+      "ports": [
+        "edge-frontend-skills-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-edit-skills-label"
+    },
+    {
+      "id": "node-edit-memory",
+      "label": "查看／编辑记忆",
+      "type": "step",
+      "members": [
+        "node-edit-memory",
+        "node-edit-memory-box",
+        "node-edit-memory-label"
+      ],
+      "ports": [
+        "edge-frontend-memory-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-edit-memory-label"
+    },
+    {
+      "id": "node-agent-notifications",
+      "label": "接收agent提示通知",
+      "type": "step",
+      "members": [
+        "node-agent-notifications",
+        "node-agent-notifications-box",
+        "node-agent-notifications-label"
+      ],
+      "ports": [
+        "edge-router-notification-in",
+        "edge-worker-notification-in",
+        "edge-dreamer-notification-in"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-agent-notifications-label"
+    },
+    {
+      "id": "node-global-merge",
+      "label": "指定合并工单",
+      "type": "process",
+      "members": [
+        "node-global-merge",
+        "node-global-merge-box",
+        "node-global-merge-label"
+      ],
+      "ports": [
+        "edge-global-merge-input-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-global-merge-label"
+    },
+    {
+      "id": "node-global-resume",
+      "label": "恢复已终止工单",
+      "type": "process",
+      "members": [
+        "node-global-resume",
+        "node-global-resume-box",
+        "node-global-resume-label"
+      ],
+      "ports": [
+        "edge-global-resume-input-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-global-resume-label"
+    },
+    {
+      "id": "node-global-recover",
+      "label": "恢复异常中断工单",
+      "type": "step",
+      "members": [
+        "node-global-recover",
+        "node-global-recover-box",
+        "node-global-recover-label"
+      ],
+      "ports": [
+        "edge-global-recover-input-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-global-recover-label"
+    },
+    {
+      "id": "node-review",
+      "label": "阶段成果／反馈",
+      "type": "step",
+      "members": [
+        "node-review",
+        "node-review-box",
+        "node-review-label"
+      ],
+      "ports": [
+        "edge-review-input-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-review-label"
+    },
+    {
+      "id": "node-global-stop",
+      "label": "终止工单",
+      "type": "process",
+      "members": [
+        "node-global-stop",
+        "node-global-stop-box",
+        "node-global-stop-label"
+      ],
+      "ports": [
+        "edge-stop-input-out"
+      ],
+      "parent": "node-frontend",
+      "labelMember": "node-global-stop-label"
+    },
+    {
+      "id": "node-user-package",
+      "label": "拼预制描述模板并打包",
+      "type": "process",
+      "members": [
+        "node-user-package",
+        "node-user-package-box",
+        "node-user-package-label",
+        "node-user-package-label-1"
+      ],
+      "ports": [
+        "edge-global-input-package-in",
+        "edge-user-package-queue-out"
+      ]
+    },
+    {
+      "id": "node-qq",
+      "label": "QQ",
+      "type": "step",
+      "members": [
+        "node-qq",
+        "node-qq-box",
+        "node-qq-label"
+      ],
+      "ports": [
+        "edge-qq-filter-out"
+      ],
+      "parent": "node-sources",
+      "labelMember": "node-qq-label"
+    },
+    {
+      "id": "node-wechat",
+      "label": "微信",
+      "type": "step",
+      "members": [
+        "node-wechat",
+        "node-wechat-box",
+        "node-wechat-label"
+      ],
+      "ports": [
+        "edge-wechat-filter-out"
+      ],
+      "parent": "node-sources",
+      "labelMember": "node-wechat-label"
+    },
+    {
+      "id": "node-xuexitong",
+      "label": "学习通",
+      "type": "step",
+      "members": [
+        "node-xuexitong",
+        "node-xuexitong-box",
+        "node-xuexitong-label"
+      ],
+      "ports": [
+        "edge-xuexitong-filter-out"
+      ],
+      "parent": "node-sources",
+      "labelMember": "node-xuexitong-label"
+    },
+    {
+      "id": "node-other-sources",
+      "label": "……",
+      "type": "step",
+      "members": [
+        "node-other-sources",
+        "node-other-sources-box",
+        "node-other-sources-label"
+      ],
+      "ports": [],
+      "parent": "node-sources",
+      "labelMember": "node-other-sources-label"
+    },
+    {
+      "id": "node-rule-filter",
+      "label": "规则初筛",
+      "type": "step",
+      "members": [
+        "node-rule-filter",
+        "node-rule-filter-box",
+        "node-rule-filter-label"
+      ],
+      "ports": [
+        "edge-qq-filter-in",
+        "edge-wechat-filter-in",
+        "edge-xuexitong-filter-in",
+        "edge-filter-context-out"
+      ],
+      "parent": "node-filter",
+      "labelMember": "node-rule-filter-label"
+    },
+    {
+      "id": "node-complete-context",
+      "label": "追溯和补齐上下文",
+      "type": "step",
+      "members": [
+        "node-complete-context",
+        "node-complete-context-box",
+        "node-complete-context-label"
+      ],
+      "ports": [
+        "edge-filter-context-in",
+        "edge-context-queue-out"
+      ],
+      "parent": "node-filter",
+      "labelMember": "node-complete-context-label"
+    },
+    {
+      "id": "node-message-queue",
+      "label": "消息包队列",
+      "type": "step",
+      "members": [
+        "node-message-queue",
+        "node-message-queue-box",
+        "node-message-queue-label"
+      ],
+      "ports": [
+        "edge-context-queue-in",
+        "edge-queue-router-out",
+        "edge-user-package-queue-in"
+      ],
+      "parent": "node-filter",
+      "labelMember": "node-message-queue-label"
+    },
+    {
+      "id": "node-router-listen",
+      "label": "监听和取任务",
+      "type": "step",
+      "members": [
+        "node-router-listen",
+        "node-router-listen-box",
+        "node-router-listen-label"
+      ],
+      "ports": [
+        "edge-queue-router-in"
+      ],
+      "parent": "node-router",
+      "labelMember": "node-router-listen-label"
+    },
+    {
+      "id": "node-router-identify",
+      "label": "识别任务",
+      "type": "step",
+      "members": [
+        "node-router-identify",
+        "node-router-identify-box",
+        "node-router-identify-label"
+      ],
+      "ports": [],
+      "parent": "node-router",
+      "labelMember": "node-router-identify-label"
+    },
+    {
+      "id": "node-router-ignore",
+      "label": "忽略 / 待确认",
+      "type": "step",
+      "members": [
+        "node-router-ignore",
+        "node-router-ignore-box",
+        "node-router-ignore-label"
+      ],
+      "ports": [],
+      "parent": "node-router",
+      "labelMember": "node-router-ignore-label"
+    },
+    {
+      "id": "node-router-merge",
+      "label": "归入已有工单",
+      "type": "step",
+      "members": [
+        "node-router-merge",
+        "node-router-merge-box",
+        "node-router-merge-label"
+      ],
+      "ports": [
+        "edge-router-input-out"
+      ],
+      "parent": "node-router",
+      "labelMember": "node-router-merge-label"
+    },
+    {
+      "id": "node-router-dispatch",
+      "label": "分派 Worker",
+      "type": "step",
+      "members": [
+        "node-router-dispatch",
+        "node-router-dispatch-box",
+        "node-router-dispatch-label"
+      ],
+      "ports": [
+        "edge-dispatch-worker-out"
+      ],
+      "parent": "node-router",
+      "labelMember": "node-router-dispatch-label"
+    },
+    {
+      "id": "node-router-create-ticket",
+      "label": "新建初始工单",
+      "type": "step",
+      "members": [
+        "node-router-create-ticket",
+        "node-router-create-ticket-box",
+        "node-router-create-ticket-label"
+      ],
+      "ports": [
+        "edge-create-ticket-out"
+      ],
+      "parent": "node-router",
+      "labelMember": "node-router-create-ticket-label"
+    },
+    {
+      "id": "node-router-lifecycle",
+      "label": "Router 生命周期说明",
+      "type": "annotation",
+      "members": [
+        "node-router-lifecycle",
+        "node-router-lifecycle-box",
+        "node-router-lifecycle-label",
+        "node-router-lifecycle-label-1",
+        "node-router-lifecycle-label-2",
+        "node-router-lifecycle-label-3",
+        "node-router-lifecycle-label-4"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-input",
+      "label": "工单补充／反馈（steer）",
+      "type": "step",
+      "members": [
+        "node-input",
+        "node-input-box",
+        "node-input-label"
+      ],
+      "ports": [
+        "edge-global-merge-input-in",
+        "edge-global-resume-input-in",
+        "edge-global-recover-input-in",
+        "edge-review-input-in",
+        "edge-router-input-in",
+        "edge-input-worker-out",
+        "edge-stop-input-in"
+      ],
+      "labelMember": "node-input-label"
+    },
+    {
+      "id": "node-worker-a",
+      "label": "Worker（对应工单 A）",
+      "type": "worker",
+      "members": [
+        "node-worker-a",
+        "node-worker-a-box",
+        "node-worker-a-label",
+        "node-worker-a-label-1"
+      ],
+      "ports": [
+        "edge-dispatch-worker-in",
+        "edge-worker-ticket-a-out",
+        "edge-input-worker-in",
+        "edge-worker-notification-out"
+      ]
+    },
+    {
+      "id": "node-ticket-a",
+      "label": "工单 A",
+      "type": "ticket",
+      "members": [
+        "node-ticket-a",
+        "node-ticket-a-box",
+        "node-ticket-a-label"
+      ],
+      "ports": [
+        "edge-create-ticket-in",
+        "edge-worker-ticket-a-in",
+        "edge-ticket-a-storage-out"
+      ],
+      "labelMember": "node-ticket-a-label"
+    },
+    {
+      "id": "node-worker-b",
+      "label": "Worker（对应工单 B）",
+      "type": "worker",
+      "members": [
+        "node-worker-b",
+        "node-worker-b-box",
+        "node-worker-b-label"
+      ],
+      "ports": [
+        "edge-contexts-worker-in",
+        "edge-skills-worker-in",
+        "edge-memories-worker-in",
+        "edge-worker-ticket-b-out",
+        "edge-worker-finish-note-out"
+      ],
+      "labelMember": "node-worker-b-label",
+      "visibleLabel": "Worker"
+    },
+    {
+      "id": "node-ticket-b",
+      "label": "工单 B",
+      "type": "ticket",
+      "members": [
+        "node-ticket-b",
+        "node-ticket-b-box",
+        "node-ticket-b-label"
+      ],
+      "ports": [
+        "edge-worker-ticket-b-in"
+      ],
+      "labelMember": "node-ticket-b-label"
+    },
+    {
+      "id": "node-worker-c",
+      "label": "Worker（对应工单 C）",
+      "type": "worker",
+      "members": [
+        "node-worker-c",
+        "node-worker-c-box",
+        "node-worker-c-label"
+      ],
+      "ports": [
+        "edge-worker-ticket-c-out"
+      ],
+      "labelMember": "node-worker-c-label",
+      "visibleLabel": "Worker"
+    },
+    {
+      "id": "node-ticket-c",
+      "label": "工单 C",
+      "type": "ticket",
+      "members": [
+        "node-ticket-c",
+        "node-ticket-c-box",
+        "node-ticket-c-label"
+      ],
+      "ports": [
+        "edge-worker-ticket-c-in"
+      ],
+      "labelMember": "node-ticket-c-label"
+    },
+    {
+      "id": "node-worker-lifecycle",
+      "label": "Worker 生命周期说明",
+      "type": "annotation",
+      "members": [
+        "node-worker-lifecycle",
+        "node-worker-lifecycle-box",
+        "node-worker-lifecycle-label",
+        "node-worker-lifecycle-label-1",
+        "node-worker-lifecycle-label-2",
+        "node-worker-lifecycle-label-3",
+        "node-worker-lifecycle-label-4"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-ticket-context-note",
+      "label": "工单和上下文说明",
+      "type": "annotation",
+      "members": [
+        "node-ticket-context-note",
+        "node-ticket-context-note-box",
+        "node-ticket-context-note-label",
+        "node-ticket-context-note-label-1",
+        "node-ticket-context-note-label-2",
+        "node-ticket-context-note-label-3",
+        "node-ticket-context-note-label-4"
+      ],
+      "ports": []
+    },
+    {
+      "id": "node-worker-note",
+      "label": "Worker 收尾，各自生成任务笔记（note）",
+      "type": "step",
+      "members": [
+        "node-worker-note",
+        "node-worker-note-box",
+        "node-worker-note-label",
+        "node-worker-note-label-1"
+      ],
+      "ports": [
+        "edge-worker-finish-note-in",
+        "edge-note-storage-out"
+      ]
+    },
+    {
+      "id": "node-dreamer-read",
+      "label": "读取任务笔记",
+      "type": "step",
+      "members": [
+        "node-dreamer-read",
+        "node-dreamer-read-box",
+        "node-dreamer-read-label"
+      ],
+      "ports": [],
+      "parent": "node-dreamer",
+      "labelMember": "node-dreamer-read-label"
+    },
+    {
+      "id": "node-dreamer-organize",
+      "label": "整理分类记忆",
+      "type": "step",
+      "members": [
+        "node-dreamer-organize",
+        "node-dreamer-organize-box",
+        "node-dreamer-organize-label"
+      ],
+      "ports": [],
+      "parent": "node-dreamer",
+      "labelMember": "node-dreamer-organize-label"
+    },
+    {
+      "id": "node-dreamer-directory",
+      "label": "更新记忆目录",
+      "type": "step",
+      "members": [
+        "node-dreamer-directory",
+        "node-dreamer-directory-box",
+        "node-dreamer-directory-label"
+      ],
+      "ports": [],
+      "parent": "node-dreamer",
+      "labelMember": "node-dreamer-directory-label"
+    },
+    {
+      "id": "node-dreamer-evidence",
+      "label": "关联证据引用",
+      "type": "step",
+      "members": [
+        "node-dreamer-evidence",
+        "node-dreamer-evidence-box",
+        "node-dreamer-evidence-label"
+      ],
+      "ports": [],
+      "parent": "node-dreamer",
+      "labelMember": "node-dreamer-evidence-label"
+    },
+    {
+      "id": "node-tickets-left",
+      "label": "工单（左侧读取视图）",
+      "type": "storage",
+      "members": [
+        "node-tickets-left",
+        "node-tickets-left-cylinder",
+        "node-tickets-left-top",
+        "node-tickets-left-label"
+      ],
+      "ports": [
+        "edge-tickets-router-out",
+        "edge-tickets-frontend-out"
+      ],
+      "parent": "node-db-left"
+    },
+    {
+      "id": "node-contexts-left",
+      "label": "各级上下文（Worker / Router）",
+      "type": "storage",
+      "members": [
+        "node-contexts-left",
+        "node-contexts-left-cylinder",
+        "node-contexts-left-top",
+        "node-contexts-left-label",
+        "node-contexts-left-label-1"
+      ],
+      "ports": [
+        "edge-contexts-router-out",
+        "edge-contexts-worker-out"
+      ],
+      "parent": "node-db-left"
+    },
+    {
+      "id": "node-skills-left",
+      "label": "Skills（左侧视图）",
+      "type": "storage",
+      "members": [
+        "node-skills-left",
+        "node-skills-left-cylinder",
+        "node-skills-left-top",
+        "node-skills-left-label"
+      ],
+      "ports": [
+        "edge-skills-worker-out",
+        "edge-frontend-skills-in"
+      ],
+      "parent": "node-db-left"
+    },
+    {
+      "id": "node-memories-left",
+      "label": "用户记忆与分类记忆等（左侧读取视图）",
+      "type": "storage",
+      "members": [
+        "node-memories-left",
+        "node-memories-left-cylinder",
+        "node-memories-left-top",
+        "node-memories-left-label",
+        "node-memories-left-label-1"
+      ],
+      "ports": [
+        "edge-memories-router-out",
+        "edge-memories-worker-out"
+      ],
+      "parent": "node-db-left"
+    },
+    {
+      "id": "node-raw-messages",
+      "label": "原始消息 / 附件引用",
+      "type": "storage",
+      "members": [
+        "node-raw-messages",
+        "node-raw-messages-cylinder",
+        "node-raw-messages-top",
+        "node-raw-messages-label",
+        "node-raw-messages-label-1"
+      ],
+      "ports": [
+        "edge-filter-raw-storage-in"
+      ],
+      "parent": "node-db-right"
+    },
+    {
+      "id": "node-tickets-right",
+      "label": "工单（右侧存储视图）",
+      "type": "storage",
+      "members": [
+        "node-tickets-right",
+        "node-tickets-right-cylinder",
+        "node-tickets-right-top",
+        "node-tickets-right-label"
+      ],
+      "ports": [
+        "edge-ticket-a-storage-in",
+        "edge-refresh-ticket-in"
+      ],
+      "parent": "node-db-right"
+    },
+    {
+      "id": "node-memories-right",
+      "label": "用户记忆与分类记忆等",
+      "type": "storage",
+      "members": [
+        "node-memories-right",
+        "node-memories-right-cylinder",
+        "node-memories-right-top",
+        "node-memories-right-label",
+        "node-memories-right-label-1"
+      ],
+      "ports": [
+        "edge-dreamer-memories-in",
+        "edge-note-storage-in",
+        "edge-frontend-memory-in"
+      ],
+      "parent": "node-db-right"
+    },
+    {
+      "id": "node-user",
+      "label": "用户",
+      "type": "actor",
+      "members": [
+        "node-user",
+        "node-user-head",
+        "node-user-body",
+        "node-user-label"
+      ],
+      "ports": []
+    }
+  ],
+  "ports": [
+    {
+      "id": "edge-qq-filter-out",
+      "node": "node-qq",
+      "x": 1550.0,
+      "y": 1055.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-qq-filter-in",
+      "node": "node-rule-filter",
+      "x": 1410.0,
+      "y": 1190.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-wechat-filter-out",
+      "node": "node-wechat",
+      "x": 1790.0,
+      "y": 1055.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-wechat-filter-in",
+      "node": "node-rule-filter",
+      "x": 1490.0,
+      "y": 1190.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-xuexitong-filter-out",
+      "node": "node-xuexitong",
+      "x": 2030.0,
+      "y": 1055.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-xuexitong-filter-in",
+      "node": "node-rule-filter",
+      "x": 1570.0,
+      "y": 1190.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-filter-context-out",
+      "node": "node-rule-filter",
+      "x": 1610.0,
+      "y": 1225.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-filter-context-in",
+      "node": "node-complete-context",
+      "x": 1690.0,
+      "y": 1225.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-context-queue-out",
+      "node": "node-complete-context",
+      "x": 2040.0,
+      "y": 1225.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-context-queue-in",
+      "node": "node-message-queue",
+      "x": 2110.0,
+      "y": 1225.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-queue-router-out",
+      "node": "node-message-queue",
+      "x": 2265,
+      "y": 1260,
+      "direction": "out"
+    },
+    {
+      "id": "edge-queue-router-in",
+      "node": "node-router-listen",
+      "x": 1530,
+      "y": 1390,
+      "direction": "in"
+    },
+    {
+      "id": "edge-filter-raw-storage-out",
+      "node": "node-filter",
+      "x": 2450.0,
+      "y": 1230.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-filter-raw-storage-in",
+      "node": "node-raw-messages",
+      "x": 4400.0,
+      "y": 1230.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-tickets-router-out",
+      "node": "node-tickets-left",
+      "x": 860.0,
+      "y": 1600.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-tickets-router-in",
+      "node": "node-router",
+      "x": 1330.0,
+      "y": 1490.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-contexts-router-out",
+      "node": "node-contexts-left",
+      "x": 860.0,
+      "y": 1990.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-contexts-router-in",
+      "node": "node-router",
+      "x": 1330.0,
+      "y": 1530.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-memories-router-out",
+      "node": "node-memories-left",
+      "x": 860.0,
+      "y": 2830.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-memories-router-in",
+      "node": "node-router",
+      "x": 1330.0,
+      "y": 1555.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-contexts-worker-out",
+      "node": "node-contexts-left",
+      "x": 860.0,
+      "y": 2040.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-contexts-worker-in",
+      "node": "node-worker-b",
+      "x": 1650.0,
+      "y": 2320.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-skills-worker-out",
+      "node": "node-skills-left",
+      "x": 860.0,
+      "y": 2410.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-skills-worker-in",
+      "node": "node-worker-b",
+      "x": 1650.0,
+      "y": 2340.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-memories-worker-out",
+      "node": "node-memories-left",
+      "x": 860.0,
+      "y": 2840.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-memories-worker-in",
+      "node": "node-worker-b",
+      "x": 1650.0,
+      "y": 2360.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-dispatch-worker-out",
+      "node": "node-router-dispatch",
+      "x": 1890,
+      "y": 1570,
+      "direction": "out"
+    },
+    {
+      "id": "edge-dispatch-worker-in",
+      "node": "node-worker-a",
+      "x": 1792.5,
+      "y": 1960,
+      "direction": "in"
+    },
+    {
+      "id": "edge-create-ticket-out",
+      "node": "node-router-create-ticket",
+      "x": 2250,
+      "y": 1570,
+      "direction": "out"
+    },
+    {
+      "id": "edge-create-ticket-in",
+      "node": "node-ticket-a",
+      "x": 2377.5,
+      "y": 1960,
+      "direction": "in"
+    },
+    {
+      "id": "edge-worker-ticket-a-out",
+      "node": "node-worker-a",
+      "x": 1935.0,
+      "y": 2055.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-worker-ticket-a-in",
+      "node": "node-ticket-a",
+      "x": 2290.0,
+      "y": 2055.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-worker-ticket-b-out",
+      "node": "node-worker-b",
+      "x": 1935.0,
+      "y": 2335.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-worker-ticket-b-in",
+      "node": "node-ticket-b",
+      "x": 2290.0,
+      "y": 2335.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-worker-ticket-c-out",
+      "node": "node-worker-c",
+      "x": 1935.0,
+      "y": 2615.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-worker-ticket-c-in",
+      "node": "node-ticket-c",
+      "x": 2290.0,
+      "y": 2615.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-worker-finish-note-out",
+      "node": "node-worker-b",
+      "x": 1792.5,
+      "y": 2430.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-worker-finish-note-in",
+      "node": "node-worker-note",
+      "x": 2650.0,
+      "y": 2995.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-dreamer-memories-out",
+      "node": "node-dreamer",
+      "x": 5100.0,
+      "y": 2330.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-dreamer-memories-in",
+      "node": "node-memories-right",
+      "x": 4820.0,
+      "y": 2330.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-note-storage-out",
+      "node": "node-worker-note",
+      "x": 3250.0,
+      "y": 2995.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-note-storage-in",
+      "node": "node-memories-right",
+      "x": 4400.0,
+      "y": 2280.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-global-input-package-out",
+      "node": "node-global-input",
+      "x": 1525.0,
+      "y": 450.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-global-input-package-in",
+      "node": "node-user-package",
+      "x": 1525.0,
+      "y": 770.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-global-merge-input-out",
+      "node": "node-global-merge",
+      "x": 2725.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-global-merge-input-in",
+      "node": "node-input",
+      "x": 2840.0,
+      "y": 1700.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-global-resume-input-out",
+      "node": "node-global-resume",
+      "x": 3095.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-global-resume-input-in",
+      "node": "node-input",
+      "x": 3095.0,
+      "y": 1700.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-global-recover-input-out",
+      "node": "node-global-recover",
+      "x": 3465.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-global-recover-input-in",
+      "node": "node-input",
+      "x": 3465.0,
+      "y": 1700.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-user-package-queue-out",
+      "node": "node-user-package",
+      "x": 2440.0,
+      "y": 840.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-user-package-queue-in",
+      "node": "node-message-queue",
+      "x": 2420.0,
+      "y": 1200.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-review-input-out",
+      "node": "node-review",
+      "x": 3835.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-review-input-in",
+      "node": "node-input",
+      "x": 3835.0,
+      "y": 1700.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-router-input-out",
+      "node": "node-router-merge",
+      "x": 1530,
+      "y": 1570,
+      "direction": "out"
+    },
+    {
+      "id": "edge-router-input-in",
+      "node": "node-input",
+      "x": 2780,
+      "y": 1760,
+      "direction": "in"
+    },
+    {
+      "id": "edge-input-worker-out",
+      "node": "node-input",
+      "x": 3200.0,
+      "y": 1820.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-input-worker-in",
+      "node": "node-worker-a",
+      "x": 1935.0,
+      "y": 2020.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-frontend-skills-out",
+      "node": "node-edit-skills",
+      "x": 2265.0,
+      "y": 360.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-frontend-skills-in",
+      "node": "node-skills-left",
+      "x": 550.0,
+      "y": 2435.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-frontend-memory-out",
+      "node": "node-edit-memory",
+      "x": 5025.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-frontend-memory-in",
+      "node": "node-memories-right",
+      "x": 4820.0,
+      "y": 2140.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-tickets-frontend-out",
+      "node": "node-tickets-left",
+      "x": 860.0,
+      "y": 1520.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-tickets-frontend-in",
+      "node": "node-view-tickets",
+      "x": 1895.0,
+      "y": 360.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-ticket-a-storage-out",
+      "node": "node-ticket-a",
+      "x": 2465.0,
+      "y": 2055.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-ticket-a-storage-in",
+      "node": "node-tickets-right",
+      "x": 4400.0,
+      "y": 1660.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-stop-input-out",
+      "node": "node-global-stop",
+      "x": 4205.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-stop-input-in",
+      "node": "node-input",
+      "x": 4205.0,
+      "y": 1700.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-refresh-ticket-out",
+      "node": "node-global-refresh",
+      "x": 4635.0,
+      "y": 640.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-refresh-ticket-in",
+      "node": "node-tickets-right",
+      "x": 4820.0,
+      "y": 1700.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-router-notification-out",
+      "node": "node-router",
+      "x": 2450,
+      "y": 1440,
+      "direction": "out"
+    },
+    {
+      "id": "edge-router-notification-in",
+      "node": "node-agent-notifications",
+      "x": 5200,
+      "y": 375,
+      "direction": "in"
+    },
+    {
+      "id": "edge-worker-notification-out",
+      "node": "node-worker-a",
+      "x": 1935.0,
+      "y": 2100.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-worker-notification-in",
+      "node": "node-agent-notifications",
+      "x": 5200.0,
+      "y": 405.0,
+      "direction": "in"
+    },
+    {
+      "id": "edge-dreamer-notification-out",
+      "node": "node-dreamer",
+      "x": 5500.0,
+      "y": 2180.0,
+      "direction": "out"
+    },
+    {
+      "id": "edge-dreamer-notification-in",
+      "node": "node-agent-notifications",
+      "x": 5200.0,
+      "y": 435.0,
+      "direction": "in"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-qq-filter",
+      "source": "node-qq",
+      "target": "node-rule-filter",
+      "sourcePort": "edge-qq-filter-out",
+      "targetPort": "edge-qq-filter-in",
+      "directed": true,
+      "relation": "将QQ消息送入规则初筛",
+      "marker": "arrow-role-sources",
+      "boundary": "internal",
+      "colorRole": "sources"
+    },
+    {
+      "id": "edge-wechat-filter",
+      "source": "node-wechat",
+      "target": "node-rule-filter",
+      "sourcePort": "edge-wechat-filter-out",
+      "targetPort": "edge-wechat-filter-in",
+      "directed": true,
+      "relation": "将微信消息送入规则初筛",
+      "marker": "arrow-role-sources",
+      "boundary": "internal",
+      "colorRole": "sources"
+    },
+    {
+      "id": "edge-xuexitong-filter",
+      "source": "node-xuexitong",
+      "target": "node-rule-filter",
+      "sourcePort": "edge-xuexitong-filter-out",
+      "targetPort": "edge-xuexitong-filter-in",
+      "directed": true,
+      "relation": "将学习通消息送入规则初筛",
+      "marker": "arrow-role-sources",
+      "boundary": "internal",
+      "colorRole": "sources"
+    },
+    {
+      "id": "edge-filter-context",
+      "source": "node-rule-filter",
+      "target": "node-complete-context",
+      "sourcePort": "edge-filter-context-out",
+      "targetPort": "edge-filter-context-in",
+      "directed": true,
+      "relation": "初筛后追溯和补齐上下文",
+      "marker": "arrow-role-storage",
+      "boundary": "internal",
+      "colorRole": "storage"
+    },
+    {
+      "id": "edge-context-queue",
+      "source": "node-complete-context",
+      "target": "node-message-queue",
+      "sourcePort": "edge-context-queue-out",
+      "targetPort": "edge-context-queue-in",
+      "directed": true,
+      "relation": "将消息包加入队列",
+      "marker": "arrow-role-storage",
+      "boundary": "internal",
+      "colorRole": "storage"
+    },
+    {
+      "id": "edge-queue-router",
+      "source": "node-message-queue",
+      "target": "node-router-listen",
+      "sourcePort": "edge-queue-router-out",
+      "targetPort": "edge-queue-router-in",
+      "directed": true,
+      "relation": "消息包队列交给监听和取任务功能；线身和箭头沿用筛选／打包层橙色。全局新任务也由此进入后续Router判断。",
+      "marker": "arrow-role-packaging",
+      "boundary": "external",
+      "colorRole": "packaging"
+    },
+    {
+      "id": "edge-filter-raw-storage",
+      "source": "node-filter",
+      "target": "node-raw-messages",
+      "sourcePort": "edge-filter-raw-storage-out",
+      "targetPort": "edge-filter-raw-storage-in",
+      "directed": true,
+      "relation": "保存原始消息和附件引用",
+      "marker": "arrow-role-packaging",
+      "boundary": "internal",
+      "colorRole": "packaging"
+    },
+    {
+      "id": "edge-tickets-router",
+      "source": "node-tickets-left",
+      "target": "node-router",
+      "sourcePort": "edge-tickets-router-out",
+      "targetPort": "edge-tickets-router-in",
+      "directed": true,
+      "relation": "代码只返回description.visible=1的候选目录，Router先看简述再按需读节点；恢复包可按指定ID读取已终止目标",
+      "marker": "arrow-role-router",
+      "boundary": "external",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-contexts-router",
+      "source": "node-contexts-left",
+      "target": "node-router",
+      "sourcePort": "edge-contexts-router-out",
+      "targetPort": "edge-contexts-router-in",
+      "directed": true,
+      "relation": "向Router按需提供已保存的实际模型上下文与追加轨迹；复用DSH原生Session事件，消息及工具往返可回读。",
+      "marker": "arrow-role-router",
+      "boundary": "internal",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-memories-router",
+      "source": "node-memories-left",
+      "target": "node-router",
+      "sourcePort": "edge-memories-router-out",
+      "targetPort": "edge-memories-router-in",
+      "directed": true,
+      "relation": "向 Router 提供记忆",
+      "marker": "arrow-role-router",
+      "boundary": "internal",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-contexts-worker",
+      "source": "node-contexts-left",
+      "target": "node-worker-b",
+      "sourcePort": "edge-contexts-worker-out",
+      "targetPort": "edge-contexts-worker-in",
+      "directed": true,
+      "relation": "向Worker按需提供已保存的实际模型上下文与追加轨迹；各轮Session独立，旧工单与历史按需读取。",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-skills-worker",
+      "source": "node-skills-left",
+      "target": "node-worker-b",
+      "sourcePort": "edge-skills-worker-out",
+      "targetPort": "edge-skills-worker-in",
+      "directed": true,
+      "relation": "向 Worker 提供 Skills（以 B 为例）",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-memories-worker",
+      "source": "node-memories-left",
+      "target": "node-worker-b",
+      "sourcePort": "edge-memories-worker-out",
+      "targetPort": "edge-memories-worker-in",
+      "directed": true,
+      "relation": "向 Worker 提供记忆（以 B 为例）",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-dispatch-worker",
+      "source": "node-router-dispatch",
+      "target": "node-worker-a",
+      "sourcePort": "edge-dispatch-worker-out",
+      "targetPort": "edge-dispatch-worker-in",
+      "directed": true,
+      "relation": "分派 Worker（以 A 为例）",
+      "marker": "arrow-role-router",
+      "boundary": "internal",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-create-ticket",
+      "source": "node-router-create-ticket",
+      "target": "node-ticket-a",
+      "sourcePort": "edge-create-ticket-out",
+      "targetPort": "edge-create-ticket-in",
+      "directed": true,
+      "relation": "Router调用建单工具，保存初始工单和原始要求；创建时自动设description.visible=1（以A为例）",
+      "marker": "arrow-role-router",
+      "boundary": "internal",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-worker-ticket-a",
+      "source": "node-worker-a",
+      "target": "node-ticket-a",
+      "sourcePort": "edge-worker-ticket-a-out",
+      "targetPort": "edge-worker-ticket-a-in",
+      "directed": true,
+      "relation": "Worker仅向工单A追加业务节点：用户输入、补充、卡点、解除和阶段成果",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-worker-ticket-b",
+      "source": "node-worker-b",
+      "target": "node-ticket-b",
+      "sourcePort": "edge-worker-ticket-b-out",
+      "targetPort": "edge-worker-ticket-b-in",
+      "directed": true,
+      "relation": "Worker仅向工单B追加业务节点，原始记录不覆盖",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-worker-ticket-c",
+      "source": "node-worker-c",
+      "target": "node-ticket-c",
+      "sourcePort": "edge-worker-ticket-c-out",
+      "targetPort": "edge-worker-ticket-c-in",
+      "directed": true,
+      "relation": "Worker仅向工单C追加业务节点，原始记录不覆盖",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-worker-finish-note",
+      "source": "node-worker-b",
+      "target": "node-worker-note",
+      "sourcePort": "edge-worker-finish-note-out",
+      "targetPort": "edge-worker-finish-note-in",
+      "directed": true,
+      "relation": "等待、待用户或交付时正常收尾，保存上下文与每轮note后退出（以B为例）",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-dreamer-memories",
+      "source": "node-dreamer",
+      "target": "node-memories-right",
+      "sourcePort": "edge-dreamer-memories-out",
+      "targetPort": "edge-dreamer-memories-in",
+      "directed": true,
+      "relation": "Dreamer整个模块到用户记忆与分类记忆等存储的统一连接；不再单独绘制内部读取笔记、更新目录的两条连线。",
+      "marker": "arrow-role-dreamer",
+      "boundary": "internal",
+      "colorRole": "dreamer"
+    },
+    {
+      "id": "edge-note-storage",
+      "source": "node-worker-note",
+      "target": "node-memories-right",
+      "sourcePort": "edge-note-storage-out",
+      "targetPort": "edge-note-storage-in",
+      "directed": true,
+      "relation": "保存每轮事实与证据Note到合并后的用户记忆与分类记忆等存储；保留Note关联和工单任务记忆索引。",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-global-input-package",
+      "source": "node-global-input",
+      "target": "node-user-package",
+      "sourcePort": "edge-global-input-package-out",
+      "targetPort": "edge-global-input-package-in",
+      "directed": true,
+      "relation": "全局新任务保留用户原文，套预制模板打包后进入消息队列。",
+      "marker": "arrow-role-frontend",
+      "boundary": "external",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-global-merge-input",
+      "source": "node-global-merge",
+      "target": "node-input",
+      "sourcePort": "edge-global-merge-input-out",
+      "targetPort": "edge-global-merge-input-in",
+      "directed": true,
+      "relation": "用户指定来源和目标工单后进入工单补充／反馈（steer）入口，不经过模板打包和消息队列。",
+      "marker": "arrow-role-frontend",
+      "boundary": "internal",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-global-resume-input",
+      "source": "node-global-resume",
+      "target": "node-input",
+      "sourcePort": "edge-global-resume-input-out",
+      "targetPort": "edge-global-resume-input-in",
+      "directed": true,
+      "relation": "恢复已终止工单进入同一steer入口，保留恢复事实；代码自动维护description.visible=1。",
+      "marker": "arrow-role-frontend",
+      "boundary": "internal",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-global-recover-input",
+      "source": "node-global-recover",
+      "target": "node-input",
+      "sourcePort": "edge-global-recover-input-out",
+      "targetPort": "edge-global-recover-input-in",
+      "directed": true,
+      "relation": "恢复异常中断工单进入同一steer入口，依据已保存工单、Session和输入记录安排继续；旧执行退出未确认时不另开。",
+      "marker": "arrow-role-frontend",
+      "boundary": "internal",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-user-package-queue",
+      "source": "node-user-package",
+      "target": "node-message-queue",
+      "sourcePort": "edge-user-package-queue-out",
+      "targetPort": "edge-user-package-queue-in",
+      "directed": true,
+      "relation": "新任务模板消息包进入既有消息包队列。",
+      "marker": "arrow-role-program",
+      "boundary": "external",
+      "colorRole": "program"
+    },
+    {
+      "id": "edge-review-input",
+      "source": "node-review",
+      "target": "node-input",
+      "sourcePort": "edge-review-input-out",
+      "targetPort": "edge-review-input-in",
+      "directed": true,
+      "relation": "工单内补充或阶段成果反馈，直接送对应Worker Session；Worker先追加输入节点再处理",
+      "marker": "arrow-role-frontend",
+      "boundary": "external",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-router-input",
+      "source": "node-router-merge",
+      "target": "node-input",
+      "sourcePort": "edge-router-input-out",
+      "targetPort": "edge-router-input-in",
+      "directed": true,
+      "relation": "Router的归入已有工单功能将新增包和补充要求交给工单补充／反馈（steer）入口；Worker先留节点再处理。",
+      "marker": "arrow-role-router",
+      "boundary": "internal",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-input-worker",
+      "source": "node-input",
+      "target": "node-worker-a",
+      "sourcePort": "edge-input-worker-out",
+      "targetPort": "edge-input-worker-in",
+      "directed": true,
+      "relation": "指定合并、两类恢复、补充、成果反馈和终止统一经工单输入入口处理；给对应Worker的新增要求先留节点，终止按已有规则收尾。",
+      "marker": "arrow-role-program",
+      "boundary": "internal",
+      "colorRole": "program"
+    },
+    {
+      "id": "edge-frontend-skills",
+      "source": "node-edit-skills",
+      "target": "node-skills-left",
+      "sourcePort": "edge-frontend-skills-out",
+      "targetPort": "edge-frontend-skills-in",
+      "directed": true,
+      "relation": "前端编辑Skills直接连接左侧数据库的Skills存储框；沿图外缘走线，不与其他业务线交叉。",
+      "marker": "arrow-role-frontend",
+      "boundary": "internal",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-frontend-memory",
+      "source": "node-edit-memory",
+      "target": "node-memories-right",
+      "sourcePort": "edge-frontend-memory-out",
+      "targetPort": "edge-frontend-memory-in",
+      "directed": true,
+      "relation": "用户查看／编辑合并后的用户记忆与分类记忆等。",
+      "marker": "arrow-role-frontend",
+      "boundary": "internal",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-tickets-frontend",
+      "source": "node-tickets-left",
+      "target": "node-view-tickets",
+      "sourcePort": "edge-tickets-frontend-out",
+      "targetPort": "edge-tickets-frontend-in",
+      "directed": true,
+      "relation": "向前端提供工单节点流；显示从事件推导，不保存工单status",
+      "marker": "arrow-role-frontend",
+      "boundary": "internal",
+      "colorRole": "frontend"
+    },
+    {
+      "id": "edge-ticket-a-storage",
+      "source": "node-ticket-a",
+      "target": "node-tickets-right",
+      "sourcePort": "edge-ticket-a-storage-out",
+      "targetPort": "edge-ticket-a-storage-in",
+      "directed": true,
+      "relation": "以工单A为例，直接向右侧数据库工单／节点流保存固定工单信息和不可变节点流；包索引与Note索引由节点生成。",
+      "marker": "arrow-role-storage",
+      "boundary": "internal",
+      "colorRole": "storage"
+    },
+    {
+      "id": "edge-stop-input",
+      "source": "node-global-stop",
+      "target": "node-input",
+      "sourcePort": "edge-stop-input-out",
+      "targetPort": "edge-stop-input-in",
+      "directed": true,
+      "relation": "终止要求进入与阶段成果反馈相同的工单输入入口；代码记录终止节点并自动设visible=0，再向对应Worker传递终止要求",
+      "marker": "arrow-role-frontend",
+      "boundary": "external",
+      "colorRole": "frontend",
+      "api": [
+        "Execution.stop"
+      ]
+    },
+    {
+      "id": "edge-refresh-ticket",
+      "source": "node-global-refresh",
+      "target": "node-tickets-right",
+      "sourcePort": "edge-refresh-ticket-out",
+      "targetPort": "edge-refresh-ticket-in",
+      "directed": true,
+      "relation": "刷新从数据库读取工单节点、索引及已保存的输入和执行记录，重建前端显示",
+      "marker": "arrow-role-frontend",
+      "boundary": "external",
+      "colorRole": "frontend",
+      "api": [
+        "Execution.refreshTicket"
+      ]
+    },
+    {
+      "id": "edge-router-notification",
+      "source": "node-router",
+      "target": "node-agent-notifications",
+      "sourcePort": "edge-router-notification-out",
+      "targetPort": "edge-router-notification-in",
+      "directed": true,
+      "relation": "Router向前端发送需要用户注意的提示通知。",
+      "marker": "arrow-role-router",
+      "boundary": "internal",
+      "colorRole": "router"
+    },
+    {
+      "id": "edge-worker-notification",
+      "source": "node-worker-a",
+      "target": "node-agent-notifications",
+      "sourcePort": "edge-worker-notification-out",
+      "targetPort": "edge-worker-notification-in",
+      "directed": true,
+      "relation": "Worker向前端发送提示通知（以工单A的Worker为例），例如补材料、等待答复或阶段成果。",
+      "marker": "arrow-role-worker",
+      "boundary": "internal",
+      "colorRole": "worker"
+    },
+    {
+      "id": "edge-dreamer-notification",
+      "source": "node-dreamer",
+      "target": "node-agent-notifications",
+      "sourcePort": "edge-dreamer-notification-out",
+      "targetPort": "edge-dreamer-notification-in",
+      "directed": true,
+      "relation": "Dreamer向前端发送记忆整理相关的提示通知。",
+      "marker": "arrow-role-dreamer",
+      "boundary": "internal",
+      "colorRole": "dreamer"
+    }
+  ],
+  "colors": {
+    "frontend": "rgb(242,166,166)",
+    "packaging": "rgb(244,193,143)",
+    "router": "rgb(153,255,153)",
+    "worker": "rgb(153,153,255)",
+    "storage": "rgb(166,106,48)",
+    "dreamer": "rgb(233,214,111)",
+    "program": "rgb(85,85,85)",
+    "sources": "rgb(86,146,48)"
+  },
+  "notes": [
+    "全局新任务经模板打包与消息队列；指定合并、恢复已终止工单、恢复异常中断工单直接进入steer入口。",
+    "Router的归入已有工单功能以独立端口连接steer；不再绘制Router恢复工单功能及其连线。",
+    "Router、Worker、Dreamer分别向前端通知框发出提示；三条边分别使用独立端口。",
+    "右侧用户记忆、分类记忆／目录与Note合并显示，用户编辑与Worker生成Note的连接保留；Dreamer的两条内部读写线改为从整个外框指向记忆存储的一条统一连接。",
+    "右侧操作日志图形及其读出连线已移除；原有其他关系保留，未补回此前刻意删除的连线。",
+    "白底黑框的模板打包及深灰色程序路径、角色颜色、单向箭头、弧形跨线和对象元数据标准保持。",
+    "每条业务边是一条连续path，仅末端单向箭头；纯代码可读取对象、端口与有向关系。",
+    "前端粉色背景内的粉色线、Router绿色背景内的绿色线均保留原色并加白色外描边；外描边只用于对比，不是额外连接。",
+    "查看工单从左侧数据库外缘绕行，无业务交叉；刷新工单状态与查看／编辑记忆位于前端右下角。工单A直接写入走上方通道，Note写入走下方通道，两者不交叉。",
+    "归入已有工单到steer只保留一个主弯折；编辑Skills连接左侧Skills，并从外缘绕行，零业务交叉。右侧Skills对象已删除，右侧三个存储框放大并收紧排布。",
+    "指定合并工单的转折提前至前端下缘外；Dreamer整体左移并避开通知横线，统一记忆连接改为水平直线，通知线仅保留两个弯折。",
+    "删除Notice Hub、DSSA参考框；左侧数据库整体右移450。到Router的三条读取路径保持顺序，到Worker的上下文路径改为直线；查看工单和编辑Skills仍沿外侧走线，零业务交叉。",
+    "删除工单A、B、C之间的汇总线和汇流点；仅以工单A为例直接连接右侧数据库工单／节点流，保留独立端口和单向箭头。",
+    "Router删除恢复工单对象及其到steer的连接。其余六个功能统一为两行三列，外框与筛选/打包层等宽；关联端口、通知线、跨线弧及白色描边同步更新。"
+  ]
+}</metadata>
+  <defs>
+    <marker id="arrow-role-frontend" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(242,166,166)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-packaging" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(244,193,143)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-router" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(153,255,153)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-worker" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(153,153,255)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-storage" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(166,106,48)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-dreamer" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(233,214,111)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-program" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(85,85,85)" data-kind="arrowhead" />
+    </marker>
+    <marker id="arrow-role-sources" orient="auto" refX="0" refY="0" markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="14" overflow="visible">
+      <path d="M 0 0 L -15 6 L -15 -6 Z" fill="rgb(86,146,48)" data-kind="arrowhead" />
+    </marker>
+    <clipPath id="frontend-line-contrast-clip" clipPathUnits="userSpaceOnUse">
+      <rect x="1300" y="300" width="4000" height="400" rx="10" />
+    </clipPath>
+    <clipPath id="router-line-contrast-clip" clipPathUnits="userSpaceOnUse">
+      <rect x="1330" y="1370" width="1120" height="220" rx="4" />
+    </clipPath>
+  </defs>
+  <style>text{font-family:Arial,"Microsoft YaHei","PingFang SC",sans-serif;fill:#111} .control{fill:#1b3445} .muted{fill:#46535c}</style>
+  <rect x="-50" y="0" width="5900" height="3280" fill="white" />
+  <g id="module-backgrounds">
+    <g id="node-frontend" data-kind="node" data-node-id="node-frontend" data-node-type="module" data-label="前端">
+      <rect id="node-frontend-box" data-node-id="node-frontend" x="1300" y="300" width="4000" height="400" rx="10" fill="rgb(242,166,166)" stroke="none" stroke-width="0" />
+      <text id="node-frontend-heading" data-node-id="node-frontend" x="1330" y="326" font-size="35" text-anchor="start" dominant-baseline="central">前端</text>
+    </g>
+    <g id="node-sources" data-kind="node" data-node-id="node-sources" data-node-type="module" data-label="消息来源">
+      <rect id="node-sources-box" data-node-id="node-sources" x="1330" y="960" width="1120" height="120" rx="4" fill="rgb(86,146,48)" stroke="none" stroke-width="0" />
+      <text id="node-sources-heading" data-node-id="node-sources" x="1260" y="1020" font-size="36" text-anchor="end" dominant-baseline="central">消息来源</text>
+    </g>
+    <g id="node-filter" data-kind="node" data-node-id="node-filter" data-node-type="module" data-label="筛选 / 打包">
+      <rect id="node-filter-box" data-node-id="node-filter" x="1330" y="1160" width="1120" height="140" rx="4" fill="rgb(244,193,143)" stroke="none" stroke-width="0" />
+      <text id="node-filter-heading" data-node-id="node-filter" x="1260" y="1230" font-size="36" text-anchor="end" dominant-baseline="central">筛选 / 打包</text>
+    </g>
+    <g id="node-router" data-kind="node" data-node-id="node-router" data-node-type="module" data-label="Router（本质是 Agent）">
+      <rect id="node-router-box" data-node-id="node-router" x="1330" y="1370" width="1120" height="220" rx="4" fill="rgb(153,255,153)" stroke="none" stroke-width="0" />
+      <text id="node-router-heading" data-node-id="node-router" x="1260" y="1390" font-size="36" text-anchor="end" dominant-baseline="central">Router</text>
+      <text id="node-router-subheading" data-node-id="node-router" x="1260" y="1435" font-size="34" text-anchor="end" dominant-baseline="central">（本质是 Agent）</text>
+    </g>
+    <g id="node-db-left" data-kind="node" data-node-id="node-db-left" data-node-type="storage-view" data-label="数据库（左侧视图）">
+      <rect id="node-db-left-box" data-node-id="node-db-left" x="450" y="1400" width="470" height="1680" rx="18" fill="rgb(183,234,235)" stroke="none" stroke-width="0" />
+      <text id="node-db-left-heading" data-node-id="node-db-left" x="685" y="1300" font-size="36" text-anchor="middle" dominant-baseline="central">数据库</text>
+      <text id="node-db-left-subheading" data-node-id="node-db-left" x="685" y="1350" font-size="34" text-anchor="middle" dominant-baseline="central">（用户设备本地存储）</text>
+      <text id="node-db-left-footnote" data-node-id="node-db-left" x="685" y="3120" font-size="32" text-anchor="middle" dominant-baseline="central">左右侧为同一数据库的视图</text>
+    </g>
+    <g id="node-db-right" data-kind="node" data-node-id="node-db-right" data-node-type="storage-view" data-label="数据库（右侧视图）">
+      <rect id="node-db-right-box" data-node-id="node-db-right" x="4370" y="980" width="480" height="1510" rx="18" fill="rgb(183,234,235)" stroke="none" stroke-width="0" />
+      <text id="node-db-right-heading" data-node-id="node-db-right" x="4610" y="880" font-size="36" text-anchor="middle" dominant-baseline="central">数据库</text>
+      <text id="node-db-right-subheading" data-node-id="node-db-right" x="4610" y="930" font-size="34" text-anchor="middle" dominant-baseline="central">（用户设备本地存储）</text>
+    </g>
+    <g id="node-dreamer" data-kind="node" data-node-id="node-dreamer" data-node-type="module" data-label="Dreamer（记忆整理 Agent）">
+      <rect id="node-dreamer-box" data-node-id="node-dreamer" x="5100.0" y="2100.0" width="400" height="900" rx="18" fill="rgb(233,214,111)" stroke="none" stroke-width="0" />
+      <text id="node-dreamer-heading" data-node-id="node-dreamer" x="5300.0" y="1990.0" font-size="36" text-anchor="middle" dominant-baseline="central">Dreamer</text>
+      <text id="node-dreamer-subheading" data-node-id="node-dreamer" x="5300.0" y="2040.0" font-size="34" text-anchor="middle" dominant-baseline="central">（记忆整理 Agent）</text>
+    </g>
+  </g>
+  <g id="directed-connections">
+    <g id="edge-qq-filter-drawing">
+      <path id="edge-qq-filter" data-kind="edge" data-source="node-qq" data-target="node-rule-filter" data-source-port="edge-qq-filter-out" data-target-port="edge-qq-filter-in" data-directed="true" data-relation="将QQ消息送入规则初筛" data-boundary="internal" data-color-role="sources" d="M 1550 1055 L 1410 1190" fill="none" stroke="rgb(86,146,48)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-sources)" />
+    </g>
+    <g id="edge-wechat-filter-drawing">
+      <path id="edge-wechat-filter" data-kind="edge" data-source="node-wechat" data-target="node-rule-filter" data-source-port="edge-wechat-filter-out" data-target-port="edge-wechat-filter-in" data-directed="true" data-relation="将微信消息送入规则初筛" data-boundary="internal" data-color-role="sources" d="M 1790 1055 L 1490 1190" fill="none" stroke="rgb(86,146,48)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-sources)" />
+    </g>
+    <g id="edge-xuexitong-filter-drawing">
+      <path id="edge-xuexitong-filter" data-kind="edge" data-source="node-xuexitong" data-target="node-rule-filter" data-source-port="edge-xuexitong-filter-out" data-target-port="edge-xuexitong-filter-in" data-directed="true" data-relation="将学习通消息送入规则初筛" data-boundary="internal" data-color-role="sources" d="M 2030 1055 L 1570 1190" fill="none" stroke="rgb(86,146,48)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-sources)" />
+    </g>
+    <g id="edge-filter-context-drawing">
+      <path id="edge-filter-context" data-kind="edge" data-source="node-rule-filter" data-target="node-complete-context" data-source-port="edge-filter-context-out" data-target-port="edge-filter-context-in" data-directed="true" data-relation="初筛后追溯和补齐上下文" data-boundary="internal" data-color-role="storage" d="M 1610 1225 L 1690 1225" fill="none" stroke="rgb(166,106,48)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-storage)" />
+    </g>
+    <g id="edge-context-queue-drawing">
+      <path id="edge-context-queue" data-kind="edge" data-source="node-complete-context" data-target="node-message-queue" data-source-port="edge-context-queue-out" data-target-port="edge-context-queue-in" data-directed="true" data-relation="将消息包加入队列" data-boundary="internal" data-color-role="storage" d="M 2040 1225 L 2110 1225" fill="none" stroke="rgb(166,106,48)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-storage)" />
+    </g>
+    <g id="edge-queue-router-drawing">
+      <path id="edge-queue-router" data-kind="edge" data-source="node-message-queue" data-target="node-router-listen" data-source-port="edge-queue-router-out" data-target-port="edge-queue-router-in" data-directed="true" data-relation="消息包队列交给监听和取任务功能；线身和箭头沿用筛选／打包层橙色。全局新任务也由此进入后续Router判断。" data-boundary="external" data-color-role="packaging" d="M 2265 1260 L 2265 1330 L 1530 1330 L 1530 1390" fill="none" stroke="rgb(244,193,143)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-packaging)" />
+    </g>
+    <g id="edge-filter-raw-storage-drawing">
+      <path id="edge-filter-raw-storage-clearance-0" data-kind="decoration" data-edge-id="edge-filter-raw-storage" d="M 2828 1230 Q 2840 1206 2852 1230" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-filter-raw-storage-clearance-1" data-kind="decoration" data-edge-id="edge-filter-raw-storage" d="M 3083 1230 Q 3095 1206 3107 1230" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-filter-raw-storage-clearance-2" data-kind="decoration" data-edge-id="edge-filter-raw-storage" d="M 3453.000001 1230 Q 3465.000001 1206 3477.000001 1230" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-filter-raw-storage-clearance-3" data-kind="decoration" data-edge-id="edge-filter-raw-storage" d="M 3822.999999 1230 Q 3834.999999 1206 3846.999999 1230" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-filter-raw-storage-clearance-4" data-kind="decoration" data-edge-id="edge-filter-raw-storage" d="M 4193 1230 Q 4205 1206 4217 1230" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-filter-raw-storage" data-kind="edge" data-source="node-filter" data-target="node-raw-messages" data-source-port="edge-filter-raw-storage-out" data-target-port="edge-filter-raw-storage-in" data-directed="true" data-relation="保存原始消息和附件引用" data-boundary="internal" data-color-role="packaging" d="M 2450 1230 L 2828 1230 Q 2840 1206 2852 1230 L 3083 1230 Q 3095 1206 3107 1230 L 3453.000001 1230 Q 3465.000001 1206 3477.000001 1230 L 3822.999999 1230 Q 3834.999999 1206 3846.999999 1230 L 4193 1230 Q 4205 1206 4217 1230 L 4400 1230" fill="none" stroke="rgb(244,193,143)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-packaging)" />
+    </g>
+    <g id="edge-tickets-router-drawing">
+      <path id="edge-tickets-router-module-contrast" data-kind="decoration" data-edge-id="edge-tickets-router" d="M 860 1600 L 1330 1490" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-tickets-router" data-kind="edge" data-source="node-tickets-left" data-target="node-router" data-source-port="edge-tickets-router-out" data-target-port="edge-tickets-router-in" data-directed="true" data-relation="代码只返回description.visible=1的候选目录，Router先看简述再按需读节点；恢复包可按指定ID读取已终止目标" data-boundary="external" data-color-role="router" d="M 860 1600 L 1330 1490" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-contexts-router-drawing">
+      <path id="edge-contexts-router-module-contrast" data-kind="decoration" data-edge-id="edge-contexts-router" d="M 860 1990 L 1050 1600 L 1330 1530" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-contexts-router" data-kind="edge" data-source="node-contexts-left" data-target="node-router" data-source-port="edge-contexts-router-out" data-target-port="edge-contexts-router-in" data-directed="true" data-relation="向Router按需提供已保存的实际模型上下文与追加轨迹；复用DSH原生Session事件，消息及工具往返可回读。" data-boundary="internal" data-color-role="router" d="M 860 1990 L 1050 1600 L 1330 1530" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-memories-router-drawing">
+      <path id="edge-memories-router-module-contrast" data-kind="decoration" data-edge-id="edge-memories-router" d="M 860 2830 L 1100 1600 L 1330 1555" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-memories-router" data-kind="edge" data-source="node-memories-left" data-target="node-router" data-source-port="edge-memories-router-out" data-target-port="edge-memories-router-in" data-directed="true" data-relation="向 Router 提供记忆" data-boundary="internal" data-color-role="router" d="M 860 2830 L 1100 1600 L 1330 1555" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-contexts-worker-drawing">
+      <path id="edge-contexts-worker-clearance-0" data-kind="decoration" data-edge-id="edge-contexts-worker" d="M 992.864983 2087.091386 Q 1012.193202 2068.479027 1015.486158 2095.109018" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-contexts-worker" data-kind="edge" data-source="node-contexts-left" data-target="node-worker-b" data-source-port="edge-contexts-worker-out" data-target-port="edge-contexts-worker-in" data-directed="true" data-relation="向Worker按需提供已保存的实际模型上下文与追加轨迹；各轮Session独立，旧工单与历史按需读取。" data-boundary="internal" data-color-role="worker" d="M 860 2040 L 992.864983 2087.091386 Q 1012.193202 2068.479027 1015.486158 2095.109018 L 1650 2320" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-skills-worker-drawing">
+      <path id="edge-skills-worker-clearance-0" data-kind="decoration" data-edge-id="edge-skills-worker" d="M 931.439858 2403.669886 Q 941.274743 2378.704409 955.346193 2401.551603" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-skills-worker" data-kind="edge" data-source="node-skills-left" data-target="node-worker-b" data-source-port="edge-skills-worker-out" data-target-port="edge-skills-worker-in" data-directed="true" data-relation="向 Worker 提供 Skills（以 B 为例）" data-boundary="internal" data-color-role="worker" d="M 860 2410 L 931.439858 2403.669886 Q 941.274743 2378.704409 955.346193 2401.551603 L 1650 2340" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-memories-worker-drawing">
+      <path id="edge-memories-worker" data-kind="edge" data-source="node-memories-left" data-target="node-worker-b" data-source-port="edge-memories-worker-out" data-target-port="edge-memories-worker-in" data-directed="true" data-relation="向 Worker 提供记忆（以 B 为例）" data-boundary="internal" data-color-role="worker" d="M 860 2840 L 1650 2360" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-dispatch-worker-drawing">
+      <path id="edge-dispatch-worker-module-contrast" data-kind="decoration" data-edge-id="edge-dispatch-worker" d="M 1890 1570 L 1792.5 1960" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-dispatch-worker" data-kind="edge" data-source="node-router-dispatch" data-target="node-worker-a" data-source-port="edge-dispatch-worker-out" data-target-port="edge-dispatch-worker-in" data-directed="true" data-relation="分派 Worker（以 A 为例）" data-boundary="internal" data-color-role="router" d="M 1890 1570 L 1792.5 1960" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-create-ticket-drawing">
+      <path id="edge-create-ticket-module-contrast" data-kind="decoration" data-edge-id="edge-create-ticket" d="M 2250 1570 L 2250 1930 L 2377.5 1930 L 2377.5 1960" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-create-ticket" data-kind="edge" data-source="node-router-create-ticket" data-target="node-ticket-a" data-source-port="edge-create-ticket-out" data-target-port="edge-create-ticket-in" data-directed="true" data-relation="Router调用建单工具，保存初始工单和原始要求；创建时自动设description.visible=1（以A为例）" data-boundary="internal" data-color-role="router" d="M 2250 1570 L 2250 1930 L 2377.5 1930 L 2377.5 1960" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-worker-ticket-a-drawing">
+      <path id="edge-worker-ticket-a-clearance-0" data-kind="decoration" data-edge-id="edge-worker-ticket-a" d="M 2048 2055 Q 2060 2031 2072 2055" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-worker-ticket-a" data-kind="edge" data-source="node-worker-a" data-target="node-ticket-a" data-source-port="edge-worker-ticket-a-out" data-target-port="edge-worker-ticket-a-in" data-directed="true" data-relation="Worker仅向工单A追加业务节点：用户输入、补充、卡点、解除和阶段成果" data-boundary="internal" data-color-role="worker" d="M 1935 2055 L 2048 2055 Q 2060 2031 2072 2055 L 2290 2055" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-worker-ticket-b-drawing">
+      <path id="edge-worker-ticket-b" data-kind="edge" data-source="node-worker-b" data-target="node-ticket-b" data-source-port="edge-worker-ticket-b-out" data-target-port="edge-worker-ticket-b-in" data-directed="true" data-relation="Worker仅向工单B追加业务节点，原始记录不覆盖" data-boundary="internal" data-color-role="worker" d="M 1935 2335 L 2290 2335" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-worker-ticket-c-drawing">
+      <path id="edge-worker-ticket-c" data-kind="edge" data-source="node-worker-c" data-target="node-ticket-c" data-source-port="edge-worker-ticket-c-out" data-target-port="edge-worker-ticket-c-in" data-directed="true" data-relation="Worker仅向工单C追加业务节点，原始记录不覆盖" data-boundary="internal" data-color-role="worker" d="M 1935 2615 L 2290 2615" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-worker-finish-note-drawing">
+      <path id="edge-worker-finish-note" data-kind="edge" data-source="node-worker-b" data-target="node-worker-note" data-source-port="edge-worker-finish-note-out" data-target-port="edge-worker-finish-note-in" data-directed="true" data-relation="等待、待用户或交付时正常收尾，保存上下文与每轮note后退出（以B为例）" data-boundary="internal" data-color-role="worker" d="M 1792.5 2430 L 1792.5 2470 L 2600 2470 L 2600 2995 L 2650 2995" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-dreamer-memories-drawing">
+      <path id="edge-dreamer-memories" data-kind="edge" data-source="node-dreamer" data-target="node-memories-right" data-source-port="edge-dreamer-memories-out" data-target-port="edge-dreamer-memories-in" data-directed="true" data-relation="Dreamer整个模块到用户记忆与分类记忆等存储的统一连接；不再单独绘制内部读取笔记、更新目录的两条连线。" data-boundary="internal" data-color-role="dreamer" d="M 5100 2330 L 4820 2330" fill="none" stroke="rgb(233,214,111)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-dreamer)" />
+    </g>
+    <g id="edge-note-storage-drawing">
+      <path id="edge-note-storage" data-kind="edge" data-source="node-worker-note" data-target="node-memories-right" data-source-port="edge-note-storage-out" data-target-port="edge-note-storage-in" data-directed="true" data-relation="保存每轮事实与证据Note到合并后的用户记忆与分类记忆等存储；保留Note关联和工单任务记忆索引。" data-boundary="internal" data-color-role="worker" d="M 3250 2995 L 4270 2995 L 4270 2280 L 4400 2280" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-global-input-package-drawing">
+      <path id="edge-global-input-package-module-contrast" data-kind="decoration" data-edge-id="edge-global-input-package" d="M 1525 450 L 1525 770" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-global-input-package" data-kind="edge" data-source="node-global-input" data-target="node-user-package" data-source-port="edge-global-input-package-out" data-target-port="edge-global-input-package-in" data-directed="true" data-relation="全局新任务保留用户原文，套预制模板打包后进入消息队列。" data-boundary="external" data-color-role="frontend" d="M 1525 450 L 1525 770" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-global-merge-input-drawing">
+      <path id="edge-global-merge-input-module-contrast" data-kind="decoration" data-edge-id="edge-global-merge-input" d="M 2725 640 L 2725 740 L 2840 740 L 2840 1700" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-global-merge-input" data-kind="edge" data-source="node-global-merge" data-target="node-input" data-source-port="edge-global-merge-input-out" data-target-port="edge-global-merge-input-in" data-directed="true" data-relation="用户指定来源和目标工单后进入工单补充／反馈（steer）入口，不经过模板打包和消息队列。" data-boundary="internal" data-color-role="frontend" d="M 2725 640 L 2725 740 L 2840 740 L 2840 1700" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-global-resume-input-drawing">
+      <path id="edge-global-resume-input-module-contrast" data-kind="decoration" data-edge-id="edge-global-resume-input" d="M 3095 640 L 3095 1700" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-global-resume-input" data-kind="edge" data-source="node-global-resume" data-target="node-input" data-source-port="edge-global-resume-input-out" data-target-port="edge-global-resume-input-in" data-directed="true" data-relation="恢复已终止工单进入同一steer入口，保留恢复事实；代码自动维护description.visible=1。" data-boundary="internal" data-color-role="frontend" d="M 3095 640 L 3095 1700" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-global-recover-input-drawing">
+      <path id="edge-global-recover-input-module-contrast" data-kind="decoration" data-edge-id="edge-global-recover-input" d="M 3465 640 L 3465 1700" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-global-recover-input" data-kind="edge" data-source="node-global-recover" data-target="node-input" data-source-port="edge-global-recover-input-out" data-target-port="edge-global-recover-input-in" data-directed="true" data-relation="恢复异常中断工单进入同一steer入口，依据已保存工单、Session和输入记录安排继续；旧执行退出未确认时不另开。" data-boundary="internal" data-color-role="frontend" d="M 3465 640 L 3465 1700" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-user-package-queue-drawing">
+      <path id="edge-user-package-queue" data-kind="edge" data-source="node-user-package" data-target="node-message-queue" data-source-port="edge-user-package-queue-out" data-target-port="edge-user-package-queue-in" data-directed="true" data-relation="新任务模板消息包进入既有消息包队列。" data-boundary="external" data-color-role="program" d="M 2440 840 L 2510 840 L 2510 1200 L 2420 1200" fill="none" stroke="rgb(85,85,85)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-program)" />
+    </g>
+    <g id="edge-review-input-drawing">
+      <path id="edge-review-input-module-contrast" data-kind="decoration" data-edge-id="edge-review-input" d="M 3835 640 L 3835 1700" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-review-input" data-kind="edge" data-source="node-review" data-target="node-input" data-source-port="edge-review-input-out" data-target-port="edge-review-input-in" data-directed="true" data-relation="工单内补充或阶段成果反馈，直接送对应Worker Session；Worker先追加输入节点再处理" data-boundary="external" data-color-role="frontend" d="M 3835 640 L 3835 1700" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-router-input-drawing">
+      <path id="edge-router-input-module-contrast" data-kind="decoration" data-edge-id="edge-router-input" d="M 1530 1570 L 1530 1760 L 1830.5 1760 Q 1842.5 1736 1854.5 1760 L 2238 1760 Q 2250 1736 2262 1760 L 2780 1760" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-router-input-clearance-0" data-kind="decoration" data-edge-id="edge-router-input" d="M 1830.5 1760 Q 1842.5 1736 1854.5 1760" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-input-clearance-1" data-kind="decoration" data-edge-id="edge-router-input" d="M 2238 1760 Q 2250 1736 2262 1760" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-input" data-kind="edge" data-source="node-router-merge" data-target="node-input" data-source-port="edge-router-input-out" data-target-port="edge-router-input-in" data-directed="true" data-relation="Router的归入已有工单功能将新增包和补充要求交给工单补充／反馈（steer）入口；Worker先留节点再处理。" data-boundary="internal" data-color-role="router" d="M 1530 1570 L 1530 1760 L 1830.5 1760 Q 1842.5 1736 1854.5 1760 L 2238 1760 Q 2250 1736 2262 1760 L 2780 1760" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-input-worker-drawing">
+      <path id="edge-input-worker-clearance-0" data-kind="decoration" data-edge-id="edge-input-worker" d="M 2262 1860 Q 2250 1836 2238 1860" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-input-worker" data-kind="edge" data-source="node-input" data-target="node-worker-a" data-source-port="edge-input-worker-out" data-target-port="edge-input-worker-in" data-directed="true" data-relation="指定合并、两类恢复、补充、成果反馈和终止统一经工单输入入口处理；给对应Worker的新增要求先留节点，终止按已有规则收尾。" data-boundary="internal" data-color-role="program" d="M 3200 1820 L 3200 1860 L 2262 1860 Q 2250 1836 2238 1860 L 2020 1860 L 2020 2020 L 1935 2020" fill="none" stroke="rgb(85,85,85)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-program)" />
+    </g>
+    <g id="edge-frontend-skills-drawing">
+      <path id="edge-frontend-skills-module-contrast" data-kind="decoration" data-edge-id="edge-frontend-skills" d="M 2265 360 L 2265 190 L 400 190 L 400 2435 L 550 2435" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-frontend-skills" data-kind="edge" data-source="node-edit-skills" data-target="node-skills-left" data-source-port="edge-frontend-skills-out" data-target-port="edge-frontend-skills-in" data-directed="true" data-relation="前端编辑Skills直接连接左侧数据库的Skills存储框；沿图外缘走线，不与其他业务线交叉。" data-boundary="internal" data-color-role="frontend" d="M 2265 360 L 2265 190 L 400 190 L 400 2435 L 550 2435" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-frontend-memory-drawing">
+      <path id="edge-frontend-memory-module-contrast" data-kind="decoration" data-edge-id="edge-frontend-memory" d="M 5025 640 L 5025 2140 L 4820 2140" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-frontend-memory" data-kind="edge" data-source="node-edit-memory" data-target="node-memories-right" data-source-port="edge-frontend-memory-out" data-target-port="edge-frontend-memory-in" data-directed="true" data-relation="用户查看／编辑合并后的用户记忆与分类记忆等。" data-boundary="internal" data-color-role="frontend" d="M 5025 640 L 5025 2140 L 4820 2140" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-tickets-frontend-drawing">
+      <path id="edge-tickets-frontend-module-contrast" data-kind="decoration" data-edge-id="edge-tickets-frontend" d="M 860 1520 L 940 1520 L 940 250 L 1895 250 L 1895 360" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-tickets-frontend" data-kind="edge" data-source="node-tickets-left" data-target="node-view-tickets" data-source-port="edge-tickets-frontend-out" data-target-port="edge-tickets-frontend-in" data-directed="true" data-relation="向前端提供工单节点流；显示从事件推导，不保存工单status" data-boundary="internal" data-color-role="frontend" d="M 860 1520 L 940 1520 L 940 250 L 1895 250 L 1895 360" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" />
+    </g>
+    <g id="edge-ticket-a-storage-drawing">
+      <path id="edge-ticket-a-storage" data-kind="edge" data-source="node-ticket-a" data-target="node-tickets-right" data-source-port="edge-ticket-a-storage-out" data-target-port="edge-ticket-a-storage-in" data-directed="true" data-relation="以工单A为例，直接向右侧数据库工单／节点流保存固定工单信息和不可变节点流；包索引与Note索引由节点生成。" data-boundary="internal" data-color-role="storage" d="M 2465 2055 L 4330 2055 L 4330 1660 L 4400 1660" fill="none" stroke="rgb(166,106,48)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-storage)" />
+    </g>
+    <g id="edge-stop-input-drawing">
+      <path id="edge-stop-input-module-contrast" data-kind="decoration" data-edge-id="edge-stop-input" d="M 4205 640 L 4205 1700" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-stop-input" data-kind="edge" data-source="node-global-stop" data-target="node-input" data-source-port="edge-stop-input-out" data-target-port="edge-stop-input-in" data-directed="true" data-relation="终止要求进入与阶段成果反馈相同的工单输入入口；代码记录终止节点并自动设visible=0，再向对应Worker传递终止要求" data-boundary="external" data-color-role="frontend" d="M 4205 640 L 4205 1700" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" data-api="Execution.stop" />
+    </g>
+    <g id="edge-refresh-ticket-drawing">
+      <path id="edge-refresh-ticket-module-contrast" data-kind="decoration" data-edge-id="edge-refresh-ticket" d="M 4635 640 L 4635 750 L 4910 750 L 4910 1700 L 4820 1700" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#frontend-line-contrast-clip)" />
+      <path id="edge-refresh-ticket" data-kind="edge" data-source="node-global-refresh" data-target="node-tickets-right" data-source-port="edge-refresh-ticket-out" data-target-port="edge-refresh-ticket-in" data-directed="true" data-relation="刷新从数据库读取工单节点、索引及已保存的输入和执行记录，重建前端显示" data-boundary="external" data-color-role="frontend" d="M 4635 640 L 4635 750 L 4910 750 L 4910 1700 L 4820 1700" fill="none" stroke="rgb(242,166,166)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-frontend)" data-api="Execution.refreshTicket" />
+    </g>
+    <g id="edge-router-notification-drawing">
+      <path id="edge-router-notification-module-contrast" data-kind="decoration" data-edge-id="edge-router-notification" d="M 2450 1440 L 2828.000001 1440 Q 2840.000001 1416 2852.000001 1440 L 3083 1440 Q 3095 1416 3107 1440 L 3453 1440 Q 3465 1416 3477 1440 L 3823 1440 Q 3835 1416 3847 1440 L 4193.000001 1440 Q 4205.000001 1416 4217.000001 1440 L 4898 1440 Q 4910 1416 4922 1440 L 5012.999999 1440 Q 5024.999999 1416 5036.999999 1440 L 5350 1440 L 5350 375 L 5200 375" fill="none" stroke="white" stroke-width="13" stroke-linecap="round" stroke-linejoin="round" clip-path="url(#router-line-contrast-clip)" />
+      <path id="edge-router-notification-clearance-0" data-kind="decoration" data-edge-id="edge-router-notification" d="M 2828.000001 1440 Q 2840.000001 1416 2852.000001 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification-clearance-1" data-kind="decoration" data-edge-id="edge-router-notification" d="M 3083 1440 Q 3095 1416 3107 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification-clearance-2" data-kind="decoration" data-edge-id="edge-router-notification" d="M 3453 1440 Q 3465 1416 3477 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification-clearance-3" data-kind="decoration" data-edge-id="edge-router-notification" d="M 3823 1440 Q 3835 1416 3847 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification-clearance-4" data-kind="decoration" data-edge-id="edge-router-notification" d="M 4193.000001 1440 Q 4205.000001 1416 4217.000001 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification-clearance-5" data-kind="decoration" data-edge-id="edge-router-notification" d="M 4898 1440 Q 4910 1416 4922 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification-clearance-6" data-kind="decoration" data-edge-id="edge-router-notification" d="M 5012.999999 1440 Q 5024.999999 1416 5036.999999 1440" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-router-notification" data-kind="edge" data-source="node-router" data-target="node-agent-notifications" data-source-port="edge-router-notification-out" data-target-port="edge-router-notification-in" data-directed="true" data-relation="Router向前端发送需要用户注意的提示通知。" data-boundary="internal" data-color-role="router" d="M 2450 1440 L 2828.000001 1440 Q 2840.000001 1416 2852.000001 1440 L 3083 1440 Q 3095 1416 3107 1440 L 3453 1440 Q 3465 1416 3477 1440 L 3823 1440 Q 3835 1416 3847 1440 L 4193.000001 1440 Q 4205.000001 1416 4217.000001 1440 L 4898 1440 Q 4910 1416 4922 1440 L 5012.999999 1440 Q 5024.999999 1416 5036.999999 1440 L 5350 1440 L 5350 375 L 5200 375" fill="none" stroke="rgb(153,255,153)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-router)" />
+    </g>
+    <g id="edge-worker-notification-drawing">
+      <path id="edge-worker-notification-clearance-0" data-kind="decoration" data-edge-id="edge-worker-notification" d="M 2238 1900 Q 2250 1876 2262 1900" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-worker-notification-clearance-1" data-kind="decoration" data-edge-id="edge-worker-notification" d="M 4317.999999 1900 Q 4329.999999 1876 4341.999999 1900" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-worker-notification-clearance-2" data-kind="decoration" data-edge-id="edge-worker-notification" d="M 5013 1900 Q 5025 1876 5037 1900" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-worker-notification-clearance-3" data-kind="decoration" data-edge-id="edge-worker-notification" d="M 5362 405 Q 5350 381 5338 405" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-worker-notification" data-kind="edge" data-source="node-worker-a" data-target="node-agent-notifications" data-source-port="edge-worker-notification-out" data-target-port="edge-worker-notification-in" data-directed="true" data-relation="Worker向前端发送提示通知（以工单A的Worker为例），例如补材料、等待答复或阶段成果。" data-boundary="internal" data-color-role="worker" d="M 1935 2100 L 2060 2100 L 2060 1900 L 2238 1900 Q 2250 1876 2262 1900 L 4317.999999 1900 Q 4329.999999 1876 4341.999999 1900 L 5013 1900 Q 5025 1876 5037 1900 L 5410 1900 L 5410 405 L 5362 405 Q 5350 381 5338 405 L 5200 405" fill="none" stroke="rgb(153,153,255)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-worker)" />
+    </g>
+    <g id="edge-dreamer-notification-drawing">
+      <path id="edge-dreamer-notification-clearance-0" data-kind="decoration" data-edge-id="edge-dreamer-notification" d="M 5422 435 Q 5410 411 5398 435" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-dreamer-notification-clearance-1" data-kind="decoration" data-edge-id="edge-dreamer-notification" d="M 5362 435 Q 5350 411 5338 435" fill="none" stroke="white" stroke-width="13" />
+      <path id="edge-dreamer-notification" data-kind="edge" data-source="node-dreamer" data-target="node-agent-notifications" data-source-port="edge-dreamer-notification-out" data-target-port="edge-dreamer-notification-in" data-directed="true" data-relation="Dreamer向前端发送记忆整理相关的提示通知。" data-boundary="internal" data-color-role="dreamer" d="M 5500 2180 L 5540 2180 L 5540 435 L 5422 435 Q 5410 411 5398 435 L 5362 435 Q 5350 411 5338 435 L 5200 435" fill="none" stroke="rgb(233,214,111)" stroke-width="5.3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-role-dreamer)" />
+    </g>
+  </g>
+  <g id="editable-objects">
+    <g id="node-global-input" data-kind="node" data-node-id="node-global-input" data-node-type="process" data-label="全局输入：新任务" data-parent="node-frontend">
+      <rect id="node-global-input-box" data-node-id="node-global-input" x="1350" y="360" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-global-input-label" data-node-id="node-global-input" x="1525.0" y="405.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">全局输入：新任务</text>
+    </g>
+    <g id="node-view-tickets" data-kind="node" data-node-id="node-view-tickets" data-node-type="step" data-label="查看工单" data-parent="node-frontend">
+      <rect id="node-view-tickets-box" data-node-id="node-view-tickets" x="1720" y="360" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-view-tickets-label" data-node-id="node-view-tickets" x="1895.0" y="405.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">查看工单</text>
+    </g>
+    <g id="node-global-refresh" data-kind="node" data-node-id="node-global-refresh" data-node-type="process" data-label="刷新工单状态" data-parent="node-frontend">
+      <rect id="node-global-refresh-box" data-node-id="node-global-refresh" x="4460.0" y="550.0" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-global-refresh-label" data-node-id="node-global-refresh" x="4635.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">刷新工单状态</text>
+    </g>
+    <g id="node-edit-skills" data-kind="node" data-node-id="node-edit-skills" data-node-type="step" data-label="编辑 Skills" data-parent="node-frontend">
+      <rect id="node-edit-skills-box" data-node-id="node-edit-skills" x="2090.0" y="360" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-edit-skills-label" data-node-id="node-edit-skills" x="2265.0" y="405.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">编辑 Skills</text>
+    </g>
+    <g id="node-edit-memory" data-kind="node" data-node-id="node-edit-memory" data-node-type="step" data-label="查看／编辑记忆" data-parent="node-frontend">
+      <rect id="node-edit-memory-box" data-node-id="node-edit-memory" x="4850.0" y="550.0" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-edit-memory-label" data-node-id="node-edit-memory" x="5025.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">查看／编辑记忆</text>
+    </g>
+    <g id="node-agent-notifications" data-kind="node" data-node-id="node-agent-notifications" data-node-type="step" data-label="接收agent提示通知" data-parent="node-frontend">
+      <rect id="node-agent-notifications-box" data-node-id="node-agent-notifications" x="4800.0" y="360.0" width="400" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-agent-notifications-label" data-node-id="node-agent-notifications" x="5000.0" y="405.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">接收agent提示通知</text>
+    </g>
+    <g id="node-global-merge" data-kind="node" data-node-id="node-global-merge" data-node-type="process" data-label="指定合并工单" data-parent="node-frontend">
+      <rect id="node-global-merge-box" data-node-id="node-global-merge" x="2550" y="550" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-global-merge-label" data-node-id="node-global-merge" x="2725.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">指定合并工单</text>
+    </g>
+    <g id="node-global-resume" data-kind="node" data-node-id="node-global-resume" data-node-type="process" data-label="恢复已终止工单" data-parent="node-frontend">
+      <rect id="node-global-resume-box" data-node-id="node-global-resume" x="2920" y="550" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-global-resume-label" data-node-id="node-global-resume" x="3095.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">恢复已终止工单</text>
+    </g>
+    <g id="node-global-recover" data-kind="node" data-node-id="node-global-recover" data-node-type="step" data-label="恢复异常中断工单" data-parent="node-frontend">
+      <rect id="node-global-recover-box" data-node-id="node-global-recover" x="3290" y="550" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-global-recover-label" data-node-id="node-global-recover" x="3465.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">恢复异常中断工单</text>
+    </g>
+    <g id="node-review" data-kind="node" data-node-id="node-review" data-node-type="step" data-label="阶段成果／反馈" data-parent="node-frontend">
+      <rect id="node-review-box" data-node-id="node-review" x="3660" y="550" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-review-label" data-node-id="node-review" x="3835.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">阶段成果／反馈</text>
+    </g>
+    <g id="node-global-stop" data-kind="node" data-node-id="node-global-stop" data-node-type="process" data-label="终止工单" data-parent="node-frontend">
+      <rect id="node-global-stop-box" data-node-id="node-global-stop" x="4030" y="550" width="350" height="90" rx="8" fill="white" stroke="#708c9f" stroke-width="2.2" />
+      <text id="node-global-stop-label" data-node-id="node-global-stop" x="4205.0" y="595.0" font-size="32" text-anchor="middle" dominant-baseline="central" class="control">终止工单</text>
+    </g>
+    <g id="node-user-package" data-kind="node" data-node-id="node-user-package" data-node-type="process" data-label="拼预制描述模板并打包">
+      <rect id="node-user-package-box" data-node-id="node-user-package" x="1330" y="770" width="1110" height="145" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-user-package-label" data-node-id="node-user-package" x="1350" y="820.42" font-size="32" text-anchor="start" dominant-baseline="central">拼预制描述模板并打包</text>
+      <text id="node-user-package-label-1" data-node-id="node-user-package" x="1350" y="864.5799999999999" font-size="32" text-anchor="start" dominant-baseline="central">保留用户原文，套新任务模板生成消息包</text>
+    </g>
+    <g id="node-qq" data-kind="node" data-node-id="node-qq" data-node-type="step" data-label="QQ" data-parent="node-sources">
+      <rect id="node-qq-box" data-node-id="node-qq" x="1450" y="985" width="200" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-qq-label" data-node-id="node-qq" x="1550.0" y="1020.0" font-size="35" text-anchor="middle" dominant-baseline="central">QQ</text>
+    </g>
+    <g id="node-wechat" data-kind="node" data-node-id="node-wechat" data-node-type="step" data-label="微信" data-parent="node-sources">
+      <rect id="node-wechat-box" data-node-id="node-wechat" x="1690" y="985" width="200" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-wechat-label" data-node-id="node-wechat" x="1790.0" y="1020.0" font-size="35" text-anchor="middle" dominant-baseline="central">微信</text>
+    </g>
+    <g id="node-xuexitong" data-kind="node" data-node-id="node-xuexitong" data-node-type="step" data-label="学习通" data-parent="node-sources">
+      <rect id="node-xuexitong-box" data-node-id="node-xuexitong" x="1930" y="985" width="200" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-xuexitong-label" data-node-id="node-xuexitong" x="2030.0" y="1020.0" font-size="35" text-anchor="middle" dominant-baseline="central">学习通</text>
+    </g>
+    <g id="node-other-sources" data-kind="node" data-node-id="node-other-sources" data-node-type="step" data-label="……" data-parent="node-sources">
+      <rect id="node-other-sources-box" data-node-id="node-other-sources" x="2170" y="985" width="200" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-other-sources-label" data-node-id="node-other-sources" x="2270.0" y="1020.0" font-size="35" text-anchor="middle" dominant-baseline="central">……</text>
+    </g>
+    <g id="node-rule-filter" data-kind="node" data-node-id="node-rule-filter" data-node-type="step" data-label="规则初筛" data-parent="node-filter">
+      <rect id="node-rule-filter-box" data-node-id="node-rule-filter" x="1360" y="1190" width="250" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-rule-filter-label" data-node-id="node-rule-filter" x="1485.0" y="1225.0" font-size="34" text-anchor="middle" dominant-baseline="central">规则初筛</text>
+    </g>
+    <g id="node-complete-context" data-kind="node" data-node-id="node-complete-context" data-node-type="step" data-label="追溯和补齐上下文" data-parent="node-filter">
+      <rect id="node-complete-context-box" data-node-id="node-complete-context" x="1690" y="1190" width="350" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-complete-context-label" data-node-id="node-complete-context" x="1865.0" y="1225.0" font-size="33" text-anchor="middle" dominant-baseline="central">追溯和补齐上下文</text>
+    </g>
+    <g id="node-message-queue" data-kind="node" data-node-id="node-message-queue" data-node-type="step" data-label="消息包队列" data-parent="node-filter">
+      <rect id="node-message-queue-box" data-node-id="node-message-queue" x="2110" y="1190" width="310" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-message-queue-label" data-node-id="node-message-queue" x="2265.0" y="1225.0" font-size="34" text-anchor="middle" dominant-baseline="central">消息包队列</text>
+    </g>
+    <g id="node-router-listen" data-kind="node" data-node-id="node-router-listen" data-node-type="step" data-label="监听和取任务" data-parent="node-router">
+      <rect id="node-router-listen-box" data-node-id="node-router-listen" x="1370" y="1390" width="320" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-router-listen-label" data-node-id="node-router-listen" x="1530" y="1425" font-size="33" text-anchor="middle" dominant-baseline="central">监听和取任务</text>
+    </g>
+    <g id="node-router-identify" data-kind="node" data-node-id="node-router-identify" data-node-type="step" data-label="识别任务" data-parent="node-router">
+      <rect id="node-router-identify-box" data-node-id="node-router-identify" x="1730" y="1390" width="320" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-router-identify-label" data-node-id="node-router-identify" x="1890" y="1425" font-size="33" text-anchor="middle" dominant-baseline="central">识别任务</text>
+    </g>
+    <g id="node-router-ignore" data-kind="node" data-node-id="node-router-ignore" data-node-type="step" data-label="忽略 / 待确认" data-parent="node-router">
+      <rect id="node-router-ignore-box" data-node-id="node-router-ignore" x="2090" y="1390" width="320" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-router-ignore-label" data-node-id="node-router-ignore" x="2250" y="1425" font-size="33" text-anchor="middle" dominant-baseline="central">忽略 / 待确认</text>
+    </g>
+    <g id="node-router-merge" data-kind="node" data-node-id="node-router-merge" data-node-type="step" data-label="归入已有工单" data-parent="node-router">
+      <rect id="node-router-merge-box" data-node-id="node-router-merge" x="1370" y="1500" width="320" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-router-merge-label" data-node-id="node-router-merge" x="1530" y="1535" font-size="33" text-anchor="middle" dominant-baseline="central">归入已有工单</text>
+    </g>
+    <g id="node-router-dispatch" data-kind="node" data-node-id="node-router-dispatch" data-node-type="step" data-label="分派 Worker" data-parent="node-router">
+      <rect id="node-router-dispatch-box" data-node-id="node-router-dispatch" x="1730" y="1500" width="320" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-router-dispatch-label" data-node-id="node-router-dispatch" x="1890" y="1535" font-size="33" text-anchor="middle" dominant-baseline="central">分派 Worker</text>
+    </g>
+    <g id="node-router-create-ticket" data-kind="node" data-node-id="node-router-create-ticket" data-node-type="step" data-label="新建初始工单" data-parent="node-router">
+      <rect id="node-router-create-ticket-box" data-node-id="node-router-create-ticket" x="2090" y="1500" width="320" height="70" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-router-create-ticket-label" data-node-id="node-router-create-ticket" x="2250" y="1535" font-size="33" text-anchor="middle" dominant-baseline="central">新建初始工单</text>
+    </g>
+    <g id="node-router-lifecycle" data-kind="node" data-node-id="node-router-lifecycle" data-node-type="annotation" data-label="Router 生命周期说明">
+      <rect id="node-router-lifecycle-box" data-node-id="node-router-lifecycle" x="1080" y="1800" width="540" height="270" rx="4" fill="#eee" stroke="#111" stroke-width="2.2" stroke-dasharray="12 9" />
+      <text id="node-router-lifecycle-label" data-node-id="node-router-lifecycle" x="1100" y="1849.44" font-size="31" text-anchor="start" dominant-baseline="central">Router 派工后结束</text>
+      <text id="node-router-lifecycle-label-1" data-node-id="node-router-lifecycle" x="1100" y="1892.22" font-size="31" text-anchor="start" dominant-baseline="central">不等 Worker，不汇总呈报</text>
+      <text id="node-router-lifecycle-label-2" data-node-id="node-router-lifecycle" x="1100" y="1935.0" font-size="31" text-anchor="start" dominant-baseline="central">决定和后续请求先可靠保存</text>
+      <text id="node-router-lifecycle-label-3" data-node-id="node-router-lifecycle" x="1100" y="1977.78" font-size="31" text-anchor="start" dominant-baseline="central">不回查全部聊天历史</text>
+      <text id="node-router-lifecycle-label-4" data-node-id="node-router-lifecycle" x="1100" y="2020.56" font-size="31" text-anchor="start" dominant-baseline="central">缺材料由 Worker 请用户补充</text>
+    </g>
+    <g id="node-input" data-kind="node" data-node-id="node-input" data-node-type="step" data-label="工单补充／反馈（steer）">
+      <rect id="node-input-box" data-node-id="node-input" x="2780" y="1700" width="1530" height="120" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-input-label" data-node-id="node-input" x="3545.0" y="1760.0" font-size="37" text-anchor="middle" dominant-baseline="central">工单补充／反馈（steer）</text>
+    </g>
+    <g id="node-worker-a" data-kind="node" data-node-id="node-worker-a" data-node-type="worker" data-label="Worker（对应工单 A）">
+      <rect id="node-worker-a-box" data-node-id="node-worker-a" x="1650" y="1960" width="285" height="190" rx="7" fill="rgb(153,153,255)" stroke="none" stroke-width="0" />
+      <text id="node-worker-a-label" data-node-id="node-worker-a" x="1792.5" y="2030.85" font-size="35" text-anchor="middle" dominant-baseline="central">Worker</text>
+      <text id="node-worker-a-label-1" data-node-id="node-worker-a" x="1792.5" y="2079.15" font-size="35" text-anchor="middle" dominant-baseline="central">（通用 Agent）</text>
+    </g>
+    <g id="node-ticket-a" data-kind="node" data-node-id="node-ticket-a" data-node-type="ticket" data-label="工单 A">
+      <rect id="node-ticket-a-box" data-node-id="node-ticket-a" x="2290" y="1960" width="175" height="190" rx="7" fill="rgb(163,147,143)" stroke="none" stroke-width="0" />
+      <text id="node-ticket-a-label" data-node-id="node-ticket-a" x="2377.5" y="2055.0" font-size="35" text-anchor="middle" dominant-baseline="central">工单 A</text>
+    </g>
+    <g id="node-worker-b" data-kind="node" data-node-id="node-worker-b" data-node-type="worker" data-label="Worker（对应工单 B）">
+      <rect id="node-worker-b-box" data-node-id="node-worker-b" x="1650" y="2240" width="285" height="190" rx="7" fill="rgb(153,153,255)" stroke="none" stroke-width="0" />
+      <text id="node-worker-b-label" data-node-id="node-worker-b" x="1792.5" y="2335.0" font-size="35" text-anchor="middle" dominant-baseline="central">Worker</text>
+    </g>
+    <g id="node-ticket-b" data-kind="node" data-node-id="node-ticket-b" data-node-type="ticket" data-label="工单 B">
+      <rect id="node-ticket-b-box" data-node-id="node-ticket-b" x="2290" y="2240" width="175" height="190" rx="7" fill="rgb(163,147,143)" stroke="none" stroke-width="0" />
+      <text id="node-ticket-b-label" data-node-id="node-ticket-b" x="2377.5" y="2335.0" font-size="35" text-anchor="middle" dominant-baseline="central">工单 B</text>
+    </g>
+    <g id="node-worker-c" data-kind="node" data-node-id="node-worker-c" data-node-type="worker" data-label="Worker（对应工单 C）">
+      <rect id="node-worker-c-box" data-node-id="node-worker-c" x="1650" y="2520" width="285" height="190" rx="7" fill="rgb(153,153,255)" stroke="none" stroke-width="0" />
+      <text id="node-worker-c-label" data-node-id="node-worker-c" x="1792.5" y="2615.0" font-size="35" text-anchor="middle" dominant-baseline="central">Worker</text>
+    </g>
+    <g id="node-ticket-c" data-kind="node" data-node-id="node-ticket-c" data-node-type="ticket" data-label="工单 C">
+      <rect id="node-ticket-c-box" data-node-id="node-ticket-c" x="2290" y="2520" width="175" height="190" rx="7" fill="rgb(163,147,143)" stroke="none" stroke-width="0" />
+      <text id="node-ticket-c-label" data-node-id="node-ticket-c" x="2377.5" y="2615.0" font-size="35" text-anchor="middle" dominant-baseline="central">工单 C</text>
+    </g>
+    <g id="node-worker-lifecycle" data-kind="node" data-node-id="node-worker-lifecycle" data-node-type="annotation" data-label="Worker 生命周期说明">
+      <rect id="node-worker-lifecycle-box" data-node-id="node-worker-lifecycle" x="1150" y="2680" width="455" height="355" rx="4" fill="#eee" stroke="#111" stroke-width="2.2" stroke-dasharray="12 9" />
+      <text id="node-worker-lifecycle-label" data-node-id="node-worker-lifecycle" x="1170" y="2774.7" font-size="30" text-anchor="start" dominant-baseline="central">每轮一个 Worker Session，</text>
+      <text id="node-worker-lifecycle-label-1" data-node-id="node-worker-lifecycle" x="1170" y="2816.1" font-size="30" text-anchor="start" dominant-baseline="central">运行中以 steer 收输入。</text>
+      <text id="node-worker-lifecycle-label-2" data-node-id="node-worker-lifecycle" x="1170" y="2857.5" font-size="30" text-anchor="start" dominant-baseline="central">等待／交付：写 Note 后退出。</text>
+      <text id="node-worker-lifecycle-label-3" data-node-id="node-worker-lifecycle" x="1170" y="2898.8999999999996" font-size="30" text-anchor="start" dominant-baseline="central">后续输入新开 Session。</text>
+      <text id="node-worker-lifecycle-label-4" data-node-id="node-worker-lifecycle" x="1170" y="2940.2999999999997" font-size="30" text-anchor="start" dominant-baseline="central">旧执行退出未明时不另开。</text>
+    </g>
+    <g id="node-ticket-context-note" data-kind="node" data-node-id="node-ticket-context-note" data-node-type="annotation" data-label="工单和上下文说明">
+      <rect id="node-ticket-context-note-box" data-node-id="node-ticket-context-note" x="1650" y="2760" width="835" height="280" rx="4" fill="#eee" stroke="#111" stroke-width="2.2" stroke-dasharray="12 9" />
+      <text id="node-ticket-context-note-label" data-node-id="node-ticket-context-note" x="1670" y="2814.44" font-size="31" text-anchor="start" dominant-baseline="central">工单：固定信息＋消息包／Note 索引。</text>
+      <text id="node-ticket-context-note-label-1" data-node-id="node-ticket-context-note" x="1670" y="2857.2200000000003" font-size="31" text-anchor="start" dominant-baseline="central">节点只追加：要求、Session、成果和卡点。</text>
+      <text id="node-ticket-context-note-label-2" data-node-id="node-ticket-context-note" x="1670" y="2900.0" font-size="31" text-anchor="start" dominant-baseline="central">工单内反馈进 Session；Worker 先留节点再做。</text>
+      <text id="node-ticket-context-note-label-3" data-node-id="node-ticket-context-note" x="1670" y="2942.78" font-size="31" text-anchor="start" dominant-baseline="central">指定合并、两类恢复均进入 steer。</text>
+      <text id="node-ticket-context-note-label-4" data-node-id="node-ticket-context-note" x="1670" y="2985.56" font-size="31" text-anchor="start" dominant-baseline="central">节点不改；代码维护 visible：终止0，恢复1。</text>
+    </g>
+    <g id="node-worker-note" data-kind="node" data-node-id="node-worker-note" data-node-type="step" data-label="Worker 收尾，各自生成任务笔记（note）">
+      <rect id="node-worker-note-box" data-node-id="node-worker-note" x="2650" y="2930" width="600" height="130" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-worker-note-label" data-node-id="node-worker-note" x="2950.0" y="2970.85" font-size="35" text-anchor="middle" dominant-baseline="central">Worker 收尾，各自</text>
+      <text id="node-worker-note-label-1" data-node-id="node-worker-note" x="2950.0" y="3019.15" font-size="35" text-anchor="middle" dominant-baseline="central">生成任务笔记（Note）</text>
+    </g>
+    <g id="node-dreamer-read" data-kind="node" data-node-id="node-dreamer-read" data-node-type="step" data-label="读取任务笔记" data-parent="node-dreamer">
+      <rect id="node-dreamer-read-box" data-node-id="node-dreamer-read" x="5140.0" y="2150.0" width="320" height="110" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-dreamer-read-label" data-node-id="node-dreamer-read" x="5300.0" y="2205.0" font-size="34" text-anchor="middle" dominant-baseline="central">读取任务笔记</text>
+    </g>
+    <g id="node-dreamer-organize" data-kind="node" data-node-id="node-dreamer-organize" data-node-type="step" data-label="整理分类记忆" data-parent="node-dreamer">
+      <rect id="node-dreamer-organize-box" data-node-id="node-dreamer-organize" x="5140.0" y="2360.0" width="320" height="110" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-dreamer-organize-label" data-node-id="node-dreamer-organize" x="5300.0" y="2415.0" font-size="34" text-anchor="middle" dominant-baseline="central">整理分类记忆</text>
+    </g>
+    <g id="node-dreamer-directory" data-kind="node" data-node-id="node-dreamer-directory" data-node-type="step" data-label="更新记忆目录" data-parent="node-dreamer">
+      <rect id="node-dreamer-directory-box" data-node-id="node-dreamer-directory" x="5140.0" y="2570.0" width="320" height="110" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-dreamer-directory-label" data-node-id="node-dreamer-directory" x="5300.0" y="2625.0" font-size="34" text-anchor="middle" dominant-baseline="central">更新记忆目录</text>
+    </g>
+    <g id="node-dreamer-evidence" data-kind="node" data-node-id="node-dreamer-evidence" data-node-type="step" data-label="关联证据引用" data-parent="node-dreamer">
+      <rect id="node-dreamer-evidence-box" data-node-id="node-dreamer-evidence" x="5140.0" y="2780.0" width="320" height="110" rx="4" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-dreamer-evidence-label" data-node-id="node-dreamer-evidence" x="5300.0" y="2835.0" font-size="34" text-anchor="middle" dominant-baseline="central">关联证据引用</text>
+    </g>
+    <g id="node-tickets-left" data-kind="node" data-node-id="node-tickets-left" data-node-type="storage" data-label="工单（左侧读取视图）" data-parent="node-db-left">
+      <path id="node-tickets-left-cylinder" data-node-id="node-tickets-left" data-kind="decoration" d="M 550 1499 C 550 1460.333333 860 1460.333333 860 1499 L 860 1771 C 860 1809.666667 550 1809.666667 550 1771 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-tickets-left-top" data-node-id="node-tickets-left" cx="705" cy="1499" rx="155.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-tickets-left-label" data-node-id="node-tickets-left" x="705" y="1643.0" font-size="35" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 705 1643)">工单</text>
+    </g>
+    <g id="node-contexts-left" data-kind="node" data-node-id="node-contexts-left" data-node-type="storage" data-label="各级上下文（Worker / Router）" data-parent="node-db-left">
+      <path id="node-contexts-left-cylinder" data-node-id="node-contexts-left" data-kind="decoration" d="M 550 1899 C 550 1860.333333 860 1860.333333 860 1899 L 860 2171 C 860 2209.666667 550 2209.666667 550 2171 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-contexts-left-top" data-node-id="node-contexts-left" cx="705" cy="1899" rx="155.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-contexts-left-label" data-node-id="node-contexts-left" x="683.5" y="2043.0" font-size="35" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 683.5 2043)">各级上下文</text>
+      <text id="node-contexts-left-label-1" data-node-id="node-contexts-left" x="726.5" y="2043.0" font-size="35" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 726.5 2043)">Worker / Router</text>
+    </g>
+    <g id="node-skills-left" data-kind="node" data-node-id="node-skills-left" data-node-type="storage" data-label="Skills（左侧视图）" data-parent="node-db-left">
+      <path id="node-skills-left-cylinder" data-node-id="node-skills-left" data-kind="decoration" d="M 550 2299 C 550 2260.333333 860 2260.333333 860 2299 L 860 2571 C 860 2609.666667 550 2609.666667 550 2571 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-skills-left-top" data-node-id="node-skills-left" cx="705" cy="2299" rx="155.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-skills-left-label" data-node-id="node-skills-left" x="705" y="2443.0" font-size="35" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 705 2443)">Skills</text>
+    </g>
+    <g id="node-memories-left" data-kind="node" data-node-id="node-memories-left" data-node-type="storage" data-label="用户记忆与分类记忆等（左侧读取视图）" data-parent="node-db-left">
+      <path id="node-memories-left-cylinder" data-node-id="node-memories-left" data-kind="decoration" d="M 550 2699 C 550 2660.333333 860 2660.333333 860 2699 L 860 2971 C 860 3009.666667 550 3009.666667 550 2971 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-memories-left-top" data-node-id="node-memories-left" cx="705" cy="2699" rx="155.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-memories-left-label" data-node-id="node-memories-left" x="683.5" y="2843.0" font-size="35" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 683.5 2843)">用户记忆</text>
+      <text id="node-memories-left-label-1" data-node-id="node-memories-left" x="726.5" y="2843.0" font-size="35" text-anchor="middle" dominant-baseline="central" transform="rotate(-90 726.5 2843)">与分类记忆等</text>
+    </g>
+    <g id="node-raw-messages" data-kind="node" data-node-id="node-raw-messages" data-node-type="storage" data-label="原始消息 / 附件引用" data-parent="node-db-right">
+      <path id="node-raw-messages-cylinder" data-node-id="node-raw-messages" data-kind="decoration" d="M 4400 1079 C 4400 1040.3333333333333 4820 1040.3333333333333 4820 1079 L 4820 1371 C 4820 1409.6666666666667 4400 1409.6666666666667 4400 1371 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-raw-messages-top" data-node-id="node-raw-messages" cx="4610.0" cy="1079" rx="210.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-raw-messages-label" data-node-id="node-raw-messages" x="4610.0" y="1211.0" font-size="38" text-anchor="middle" dominant-baseline="central">原始消息</text>
+      <text id="node-raw-messages-label-1" data-node-id="node-raw-messages" x="4610.0" y="1263.0" font-size="38" text-anchor="middle" dominant-baseline="central">附件引用</text>
+    </g>
+    <g id="node-tickets-right" data-kind="node" data-node-id="node-tickets-right" data-node-type="storage" data-label="工单（右侧存储视图）" data-parent="node-db-right">
+      <path id="node-tickets-right-cylinder" data-node-id="node-tickets-right" data-kind="decoration" d="M 4400 1529 C 4400 1490.3333333333333 4820 1490.3333333333333 4820 1529 L 4820 1821 C 4820 1859.6666666666667 4400 1859.6666666666667 4400 1821 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-tickets-right-top" data-node-id="node-tickets-right" cx="4610.0" cy="1529" rx="210.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-tickets-right-label" data-node-id="node-tickets-right" x="4610.0" y="1687.0" font-size="38" text-anchor="middle" dominant-baseline="central">工单／节点流</text>
+    </g>
+    <g id="node-memories-right" data-kind="node" data-node-id="node-memories-right" data-node-type="storage" data-label="用户记忆与分类记忆等" data-parent="node-db-right">
+      <path id="node-memories-right-cylinder" data-node-id="node-memories-right" data-kind="decoration" d="M 4400 2049 C 4400 2010.3333333333333 4820 2010.3333333333333 4820 2049 L 4820 2391 C 4820 2429.6666666666665 4400 2429.6666666666665 4400 2391 Z" fill="white" stroke="#111" stroke-width="2.2" />
+      <ellipse id="node-memories-right-top" data-node-id="node-memories-right" cx="4610.0" cy="2049" rx="210.0" ry="29" fill="white" stroke="#111" stroke-width="2.2" />
+      <text id="node-memories-right-label" data-node-id="node-memories-right" x="4610.0" y="2206.0" font-size="38" text-anchor="middle" dominant-baseline="central">用户记忆与</text>
+      <text id="node-memories-right-label-1" data-node-id="node-memories-right" x="4610.0" y="2258.0" font-size="38" text-anchor="middle" dominant-baseline="central">分类记忆等</text>
+    </g>
+    <g id="node-user" data-kind="node" data-node-id="node-user" data-node-type="actor" data-label="用户">
+      <circle id="node-user-head" data-node-id="node-user" cx="2920" cy="45" r="37" fill="#78d7aa" stroke="#111" stroke-width="2" />
+      <path id="node-user-body" data-node-id="node-user" data-kind="decoration" d="M 2920 82 L 2920 175 M 2845 107 L 2995 107 M 2920 175 L 2845 240 M 2920 175 L 2995 240" fill="none" stroke="#111" stroke-width="2.2" />
+      <text id="node-user-label" data-node-id="node-user" x="2920" y="262" font-size="35" text-anchor="middle" dominant-baseline="central">用户</text>
+    </g>
+  </g>
+  <g id="explicit-ports">
+    <circle id="edge-qq-filter-out" data-kind="port" data-node-id="node-qq" data-direction="out" cx="1550" cy="1055" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-qq-filter-in" data-kind="port" data-node-id="node-rule-filter" data-direction="in" cx="1410" cy="1190" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-wechat-filter-out" data-kind="port" data-node-id="node-wechat" data-direction="out" cx="1790" cy="1055" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-wechat-filter-in" data-kind="port" data-node-id="node-rule-filter" data-direction="in" cx="1490" cy="1190" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-xuexitong-filter-out" data-kind="port" data-node-id="node-xuexitong" data-direction="out" cx="2030" cy="1055" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-xuexitong-filter-in" data-kind="port" data-node-id="node-rule-filter" data-direction="in" cx="1570" cy="1190" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-filter-context-out" data-kind="port" data-node-id="node-rule-filter" data-direction="out" cx="1610" cy="1225" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-filter-context-in" data-kind="port" data-node-id="node-complete-context" data-direction="in" cx="1690" cy="1225" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-context-queue-out" data-kind="port" data-node-id="node-complete-context" data-direction="out" cx="2040" cy="1225" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-context-queue-in" data-kind="port" data-node-id="node-message-queue" data-direction="in" cx="2110" cy="1225" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-queue-router-out" data-kind="port" data-node-id="node-message-queue" data-direction="out" cx="2265" cy="1260" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-queue-router-in" data-kind="port" data-node-id="node-router-listen" data-direction="in" cx="1530" cy="1390" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-filter-raw-storage-out" data-kind="port" data-node-id="node-filter" data-direction="out" cx="2450" cy="1230" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-filter-raw-storage-in" data-kind="port" data-node-id="node-raw-messages" data-direction="in" cx="4400" cy="1230" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-tickets-router-out" data-kind="port" data-node-id="node-tickets-left" data-direction="out" cx="860" cy="1600" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-tickets-router-in" data-kind="port" data-node-id="node-router" data-direction="in" cx="1330" cy="1490" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-contexts-router-out" data-kind="port" data-node-id="node-contexts-left" data-direction="out" cx="860" cy="1990" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-contexts-router-in" data-kind="port" data-node-id="node-router" data-direction="in" cx="1330" cy="1530" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-memories-router-out" data-kind="port" data-node-id="node-memories-left" data-direction="out" cx="860" cy="2830" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-memories-router-in" data-kind="port" data-node-id="node-router" data-direction="in" cx="1330" cy="1555" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-contexts-worker-out" data-kind="port" data-node-id="node-contexts-left" data-direction="out" cx="860" cy="2040" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-contexts-worker-in" data-kind="port" data-node-id="node-worker-b" data-direction="in" cx="1650" cy="2320" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-skills-worker-out" data-kind="port" data-node-id="node-skills-left" data-direction="out" cx="860" cy="2410" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-skills-worker-in" data-kind="port" data-node-id="node-worker-b" data-direction="in" cx="1650" cy="2340" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-memories-worker-out" data-kind="port" data-node-id="node-memories-left" data-direction="out" cx="860" cy="2840" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-memories-worker-in" data-kind="port" data-node-id="node-worker-b" data-direction="in" cx="1650" cy="2360" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-dispatch-worker-out" data-kind="port" data-node-id="node-router-dispatch" data-direction="out" cx="1890" cy="1570" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-dispatch-worker-in" data-kind="port" data-node-id="node-worker-a" data-direction="in" cx="1792.5" cy="1960" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-create-ticket-out" data-kind="port" data-node-id="node-router-create-ticket" data-direction="out" cx="2250" cy="1570" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-create-ticket-in" data-kind="port" data-node-id="node-ticket-a" data-direction="in" cx="2377.5" cy="1960" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-ticket-a-out" data-kind="port" data-node-id="node-worker-a" data-direction="out" cx="1935" cy="2055" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-ticket-a-in" data-kind="port" data-node-id="node-ticket-a" data-direction="in" cx="2290" cy="2055" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-ticket-b-out" data-kind="port" data-node-id="node-worker-b" data-direction="out" cx="1935" cy="2335" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-ticket-b-in" data-kind="port" data-node-id="node-ticket-b" data-direction="in" cx="2290" cy="2335" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-ticket-c-out" data-kind="port" data-node-id="node-worker-c" data-direction="out" cx="1935" cy="2615" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-ticket-c-in" data-kind="port" data-node-id="node-ticket-c" data-direction="in" cx="2290" cy="2615" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-finish-note-out" data-kind="port" data-node-id="node-worker-b" data-direction="out" cx="1792.5" cy="2430" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-finish-note-in" data-kind="port" data-node-id="node-worker-note" data-direction="in" cx="2650" cy="2995" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-dreamer-memories-out" data-kind="port" data-node-id="node-dreamer" data-direction="out" cx="5100" cy="2330" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-dreamer-memories-in" data-kind="port" data-node-id="node-memories-right" data-direction="in" cx="4820" cy="2330" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-note-storage-out" data-kind="port" data-node-id="node-worker-note" data-direction="out" cx="3250" cy="2995" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-note-storage-in" data-kind="port" data-node-id="node-memories-right" data-direction="in" cx="4400" cy="2280" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-input-package-out" data-kind="port" data-node-id="node-global-input" data-direction="out" cx="1525" cy="450" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-input-package-in" data-kind="port" data-node-id="node-user-package" data-direction="in" cx="1525" cy="770" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-merge-input-out" data-kind="port" data-node-id="node-global-merge" data-direction="out" cx="2725" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-merge-input-in" data-kind="port" data-node-id="node-input" data-direction="in" cx="2840" cy="1700" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-resume-input-out" data-kind="port" data-node-id="node-global-resume" data-direction="out" cx="3095" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-resume-input-in" data-kind="port" data-node-id="node-input" data-direction="in" cx="3095" cy="1700" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-recover-input-out" data-kind="port" data-node-id="node-global-recover" data-direction="out" cx="3465" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-global-recover-input-in" data-kind="port" data-node-id="node-input" data-direction="in" cx="3465" cy="1700" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-user-package-queue-out" data-kind="port" data-node-id="node-user-package" data-direction="out" cx="2440" cy="840" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-user-package-queue-in" data-kind="port" data-node-id="node-message-queue" data-direction="in" cx="2420" cy="1200" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-review-input-out" data-kind="port" data-node-id="node-review" data-direction="out" cx="3835" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-review-input-in" data-kind="port" data-node-id="node-input" data-direction="in" cx="3835" cy="1700" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-router-input-out" data-kind="port" data-node-id="node-router-merge" data-direction="out" cx="1530" cy="1570" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-router-input-in" data-kind="port" data-node-id="node-input" data-direction="in" cx="2780" cy="1760" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-input-worker-out" data-kind="port" data-node-id="node-input" data-direction="out" cx="3200" cy="1820" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-input-worker-in" data-kind="port" data-node-id="node-worker-a" data-direction="in" cx="1935" cy="2020" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-frontend-skills-out" data-kind="port" data-node-id="node-edit-skills" data-direction="out" cx="2265" cy="360" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-frontend-skills-in" data-kind="port" data-node-id="node-skills-left" data-direction="in" cx="550" cy="2435" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-frontend-memory-out" data-kind="port" data-node-id="node-edit-memory" data-direction="out" cx="5025" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-frontend-memory-in" data-kind="port" data-node-id="node-memories-right" data-direction="in" cx="4820" cy="2140" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-tickets-frontend-out" data-kind="port" data-node-id="node-tickets-left" data-direction="out" cx="860" cy="1520" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-tickets-frontend-in" data-kind="port" data-node-id="node-view-tickets" data-direction="in" cx="1895" cy="360" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-ticket-a-storage-out" data-kind="port" data-node-id="node-ticket-a" data-direction="out" cx="2465" cy="2055" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-ticket-a-storage-in" data-kind="port" data-node-id="node-tickets-right" data-direction="in" cx="4400" cy="1660" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-stop-input-out" data-kind="port" data-node-id="node-global-stop" data-direction="out" cx="4205" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-stop-input-in" data-kind="port" data-node-id="node-input" data-direction="in" cx="4205" cy="1700" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-refresh-ticket-out" data-kind="port" data-node-id="node-global-refresh" data-direction="out" cx="4635" cy="640" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-refresh-ticket-in" data-kind="port" data-node-id="node-tickets-right" data-direction="in" cx="4820" cy="1700" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-router-notification-out" data-kind="port" data-node-id="node-router" data-direction="out" cx="2450" cy="1440" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-router-notification-in" data-kind="port" data-node-id="node-agent-notifications" data-direction="in" cx="5200" cy="375" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-notification-out" data-kind="port" data-node-id="node-worker-a" data-direction="out" cx="1935" cy="2100" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-worker-notification-in" data-kind="port" data-node-id="node-agent-notifications" data-direction="in" cx="5200" cy="405" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-dreamer-notification-out" data-kind="port" data-node-id="node-dreamer" data-direction="out" cx="5500" cy="2180" r="2.5" fill="none" stroke="none" />
+    <circle id="edge-dreamer-notification-in" data-kind="port" data-node-id="node-agent-notifications" data-direction="in" cx="5200" cy="435" r="2.5" fill="none" stroke="none" />
+  </g>
+  <text id="crossing-explanation" x="2780" y="3150" font-size="28" class="muted">弧形跨线表示交叉，不建立连接；连接只由对象ID和独立端口确定。</text>
+</svg>
