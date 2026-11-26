@@ -55,7 +55,7 @@ test("notify 去重：同包第二次返回 REPLAYED，不再启动 Router", asy
   assert.equal(loop.deliveries.length, before)
 })
 
-test("notify 归入：Router 回复目标工单，宿主把包交付目标 Worker（steer 不走，package 走 queue）", async () => {
+test("notify 归入：Router 回复目标工单，宿主把包以 steer 交付目标 Worker", async () => {
   const pkg1 = "pkg-017", tid = newTicketId(pkg1), pkg2 = "pkg-021"
   const attachTurn: Turn = async () => ({ text: JSON.stringify({ ticket_id: tid, package_ref: { id: pkg2 } }) })
   const { o, loop } = await setup({
@@ -71,6 +71,7 @@ test("notify 归入：Router 回复目标工单，宿主把包交付目标 Worke
   const input = t.nodes.find(n => n.node_id === `${tid}/package-${pkg2}`)!
   assert.equal(input.kind, "input")
   assert.deepEqual(t.package_refs, [{ id: pkg1 }, { id: pkg2 }])
+  assert.equal(loop.deliveries.find(d => d.text.includes(`package-${pkg2}`))!.mode, "steer")
 })
 
 test("用户 supplement：写 input 节点并 steer 交付；去重返回 REPLAYED", async () => {

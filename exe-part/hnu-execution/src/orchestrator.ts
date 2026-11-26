@@ -90,7 +90,7 @@ export class Orchestrator {
       node_id: `${ticketId}/session`, kind: "session", text: "Worker 开始处理。",
       refs: [{ kind: "session", id: workerSessionId(ticketId), role: "worker" }],
     })
-    await this.deliverWorker(ticketId, { kind: "package", package_ref: { id: packageId }, input_node_id: `${ticketId}/1` })
+    await this.deliverWorker(ticketId, { kind: "package", package_ref: { id: packageId }, input_node_id: `${ticketId}/1` }, "queue")
   }
 
   // 归入已有工单：Worker 自行追加 input 节点，宿主只交付 package 输入。
@@ -195,8 +195,8 @@ export class Orchestrator {
     await this.deliverWorker(ticketId, { kind: "download", notification_id: notificationId, operation_id: op, input_node_id: nodeId, blocked_node_id: blockedNodeId, raw_id: raw, file_path: path })
   }
 
-  // —— Worker 交付：复用每单固定 Session，package 开新轮，操作用 steer ——
-  private async deliverWorker(ticketId: string, input: WorkerInput): Promise<void> {
+  // —— Worker 交付：复用每单固定 Session。首次派工开新一轮（queue），之后的归入包与用户操作都用 steer ——
+  private async deliverWorker(ticketId: string, input: WorkerInput, mode: "queue" | "steer" = "steer"): Promise<void> {
     const sessionId = workerSessionId(ticketId)
     const original = originalId(input)
     await mkdir(this.workspace(ticketId), { recursive: true }) // Worker 以工作区为 cwd，需先建目录
@@ -213,7 +213,7 @@ export class Orchestrator {
     const spec: AgentSpec = { sessionId, role: "worker", cwd: this.workspace(ticketId), prompt: this.prompts.worker, tools }
     const exists = await this.loop.exists(sessionId)
     const agent = exists ? await this.loop.resume(spec) : await this.loop.create(spec)
-    await agent.send(deliveryRequestId(sessionId, input.kind, original), JSON.stringify(binding), input.kind === "package" ? "queue" : "steer")
+    await agent.send(deliveryRequestId(sessionId, input.kind, original), JSON.stringify(binding), mode)
     const end = await agent.idle()
     await (end.ok ? agent.dispose() : this.recordInterrupted(ticketId, agent))
   }

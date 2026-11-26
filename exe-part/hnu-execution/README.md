@@ -37,8 +37,8 @@
   成果文件要放在 `workspace/artifacts/`，Note 草稿要放在 `workspace/notes/<note_id>.json`；
   `mergeTickets` 只能由目标单的 Worker 调用，参数要与已保存的原操作一致。
   校验不通过时回 `INVALID_INPUT` 或 `REF_NOT_FOUND`，并附 `detail` 说明，供模型修正。
-- **每单一个 Worker Session 复用**：`worker-<ticket_id>`；package 开新轮（queue），
-  用户操作用 steer。
+- **每单一个 Worker Session 复用**：`worker-<ticket_id>`；首次派工开新一轮（queue），
+  之后归入的新包和用户操作都用 steer。
 - **追加式 JSONL**：工单只追加不改，原字节保留为前缀。可见性由节点顺序计算。
 - **幂等**：接管按包 ID、操作按 operation_id、节点按 node_id、通知按 notification_id
   去重；同内容重放回 REPLAYED，异内容回 CONFLICT。
