@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SuperDot · 消息交接</title>
+<style>
+:root{color-scheme:light;--ink:#20232c;--muted:#606575;--line:#e2e4ea;--paper:#fff;--side:#f5f6f9;--accent:#4948ae;font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);background:#eef0f4}
+button,textarea,select,input{font:inherit}
+button,select{cursor:pointer}
+button:disabled{cursor:default;opacity:.55}
+button,select,input,textarea{border:1px solid var(--line);border-radius:7px;background:var(--paper);color:var(--ink);padding:8px 11px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+header{display:flex;align-items:center;gap:11px;padding:18px 26px;border-bottom:1px solid var(--line);background:var(--paper);font-weight:670}
+.mark{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+.shell{max-width:1080px;margin:34px auto;background:var(--paper);border:1px solid var(--line);border-radius:14px;display:grid;grid-template-columns:310px minmax(0,1fr);min-height:565px;overflow:hidden}
+aside{background:var(--side);border-right:1px solid var(--line);padding:25px}
+main{padding:27px 32px;min-width:0}
+h1,h2{margin:0 0 17px;line-height:1.25;font-weight:650}
+h1{font-size:24px;letter-spacing:-.035em}h2{font-size:16px}
+form,label{display:grid;gap:5px}form{gap:12px}
+textarea{width:100%;min-height:92px;resize:vertical}
+input,select{width:100%;min-width:0}
+.primary{background:var(--accent);color:white;border-color:var(--accent)}
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.tools select{width:auto}
+section+section,aside section{margin-top:25px;padding-top:19px;border-top:1px solid var(--line)}
+.rows{list-style:none;padding:0;margin:0}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;padding:12px 0;border-top:1px solid var(--line)}
+.row footer{grid-column:1/-1;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.row strong{font-weight:590;overflow-wrap:anywhere;white-space:pre-wrap}
+.state{font-size:13px;color:var(--muted)}.accepted{color:#226349}.retry{color:#905016}
+small,output{color:var(--muted);font-size:13px}
+output{display:block;min-height:1.4em;margin-bottom:8px}
+details{margin-top:16px}summary{cursor:pointer;color:var(--muted)}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--side);padding:12px;border-radius:7px;font-size:12px}
+.ticket{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0}
+[hidden]{display:none!important}
+@media(max-width:740px){.shell{margin:12px;grid-template-columns:minmax(0,1fr)}aside{border-right:0;border-bottom:1px solid var(--line)}main,aside{padding:20px}}
+</style>
+<header><span class="mark" aria-hidden="true"></span>SuperDot</header>
+<div class="shell">
+<aside>
+<h2>添加消息包</h2>
+<form id="compose">
+<label>输入类型<select name="kind"><option value="source_message">QQ 消息</option><option value="new_task">全局新任务</option><option value="merge">指定合并</option></select></label>
+<label id="message">原文<textarea name="text" required>请按模板制作志愿活动 PPT。</textarea></label>
+<label id="attachment">附件引用<input name="attachment" value="template-017"></label>
+<div id="merge" hidden>
+<label>来源工单<select name="from"><option>A</option><option>B</option></select></label>
+<label>目标工单<select name="to"><option>B</option><option>A</option></select></label>
+</div>
+<button class="primary">加入队列</button>
+</form>
+<section aria-labelledby="ticket-title">
+<h2 id="ticket-title">工单可见性</h2>
+<div id="tickets"></div>
+</section>
+</aside>
+<main>
+<h1>消息交接</h1>
+<div class="tools">
+<select id="mode" aria-label="Router 模拟情形">
+<option value="normal">正常接管</option>
+<option value="offline">Router 不可用</option>
+<option value="lost_ack">接管后丢失回执</option>
+</select>
+<button id="tick">运行一轮看门狗</button>
+</div>
+<output id="feedback" role="status"></output>
+<ul class="rows" id="packages"></ul>
+<details><summary>接口数据</summary><pre id="json"></pre></details>
+</main>
+</div>
+<script>
+const compose = document.querySelector("#compose");
+const mode = document.querySelector("#mode");
+const tick = document.querySelector("#tick");
+const feedback = document.querySelector("#feedback");
+const packages = document.querySelector("#packages");
+const tickets = document.querySelector("#tickets");
+const states = {QUEUED:"排队中", AWAITING_ACK:"等待回执", RETRY_WAIT:"待重试", ACCEPTED:"已接管"};
+const messages = {
+  FILTERED:"QQ 监听已关闭", QUEUED:"已加入队列", OK:"成功", REPLAYED:"已返回原记录", NO_WORK:"队列为空",
+  ROUTER_UNAVAILABLE:"Router 不可用，消息包已保留", ACK_UNKNOWN:"回执未收到，消息包已保留",
+  INVALID_INPUT:"请检查输入，合并的来源与目标需不同", STORE_UNAVAILABLE:"存储暂不可用",
+  REF_NOT_FOUND:"找不到对应记录", CONFLICT:"操作编号已被其他内容占用"
+};
+let busy = false;
+
+async function call(path, body) {
+  const options = body === undefined ? {} : {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  };
+  const response = await fetch(path, options);
+  return response.json();
+}
+function node(tag, text, style) {
+  const element = document.createElement(tag);
+  element.textContent = text;
+  if (style) element.className = style;
+  return element;
+}
+function render(state, result) {
+  packages.replaceChildren(...state.packages.map(item => {
+    const row = node("li", "", "row");
+    const title = item.kind === "merge" ? `合并 ${item.source_ticket_id} → ${item.target_ticket_id}` : item.text;
+    const css = item.state === "ACCEPTED" ? "accepted" : item.state === "RETRY_WAIT" ? "retry" : "";
+    row.append(node("strong", title), node("span", states[item.state], "state " + css));
+    const trace = [item.package_ref.id];
+    if (item.receipt_id) trace.push(item.receipt_id);
+    if (item.state === "RETRY_WAIT") trace.push(item.code);
+    row.append(node("footer", trace.join(" / ")));
+    return row;
+  }));
+  if (!state.packages.length) packages.append(node("li","暂无消息包","state"));
+  tickets.replaceChildren(...state.tickets.map(ticket => {
+    const row = node("div", "", "ticket");
+    row.append(node("span", ticket.id));
+    if (ticket.visible) row.append(node("small", "可见"));
+    else {
+      const button = node("button", "恢复可见");
+      button.onclick = () => act("/api/tickets/restore", {ticket_id:ticket.id});
+      row.append(button);
+    }
+    return row;
+  }));
+  document.querySelector("#json").textContent = JSON.stringify({result, ...state}, null, 2);
+}
+async function act(path, body) {
+  if (busy) return;
+  busy = true;
+  tick.disabled = true;
+  compose.querySelector("button").disabled = true;
+  try {
+    const result = path ? await call(path, body) : null;
+    const state = await call("/api/state");
+    if (state.code !== "OK") throw new Error(messages[state.code] || state.code);
+    render(state, result);
+    feedback.textContent = result ? (messages[result.code] || result.code) : "";
+  } catch (error) {
+    feedback.textContent = error instanceof TypeError ? "本地程序未连接，启动后刷新" : error.message;
+  } finally {
+    busy = false;
+    tick.disabled = false;
+    compose.querySelector("button").disabled = false;
+  }
+}
+compose.kind.onchange = () => {
+  const merge = compose.kind.value === "merge";
+  document.querySelector("#merge").hidden = !merge;
+  document.querySelector("#message").hidden = merge;
+  document.querySelector("#attachment").hidden = merge;
+  compose.elements.text.disabled = merge;
+  compose.elements.attachment.disabled = merge;
+};
+compose.onsubmit = event => {
+  event.preventDefault();
+  const input = Object.fromEntries(new FormData(compose));
+  const id = crypto.randomUUID();
+  const body = {kind:input.kind};
+  if (input.kind === "merge") {
+    Object.assign(body, {operation_id:id,source_ticket_id:input.from,target_ticket_id:input.to});
+  } else {
+    Object.assign(body, {text:input.text,attachment_refs:input.attachment.trim() ? [{id:input.attachment.trim()}] : []});
+    if (input.kind === "new_task") body.operation_id = id;
+    else Object.assign(body,{account_id:"qq-demo",conversation_id:"group-demo",message_id:id});
+  }
+  act("/api/packages", body);
+};
+tick.onclick = () => act("/api/watchdog/tick", {mode:mode.value});
+act();
+</script>
+</html>
