@@ -3,7 +3,7 @@
 import type { Context } from "@deepseek-ai/cordis"
 import type { Agent as DshAgent, AgentHandle } from "@deepseek-ai/dsh-agent"
 import { freezeMessage, MessageId, type UserMessage } from "@deepseek-ai/dsh-llm"
-import type { SessionId } from "@deepseek-ai/dsh-session"
+import { SessionId } from "@deepseek-ai/dsh-session"
 import type { Agent, AgentLoop, AgentSpec, RunEnd, Tool } from "../ports.ts"
 import { NATIVE_TOOLS } from "../tools.ts"
 
@@ -16,25 +16,37 @@ declare module "@deepseek-ai/dsh-llm" {
 
 const msgId = (requestId: string): string => MessageId(`hnu-exec:${requestId}`)
 
+// 重定向与就地改写会落盘，其余写入命令同理。
+const WRITES = /(?:>>?|\btee\b|\bmv\b|\brm\b|\bcp\b|\bmkdir\b|\btouch\b|\bln\b|\bsed\s+-i|\btruncate\b|\bdd\b)/
+export const routerBashGuard = (execution: { name: string; arguments: unknown }): string | undefined => {
+  if (execution.name !== "bash") return undefined
+  const command = (execution.arguments as { command?: unknown })?.command
+  return typeof command === "string" && WRITES.test(command) ? "Router 只判断去向，不写文件" : undefined
+}
+
+export type ModelChoice = { provider?: string; model?: string }
+
 export class DshAgentLoop implements AgentLoop {
   private ctx: Context
-  constructor(ctx: Context) { this.ctx = ctx }
+  private model: ModelChoice
+  constructor(ctx: Context, model: ModelChoice = {}) { this.ctx = ctx; this.model = model }
 
   async exists(sessionId: string): Promise<boolean> {
     return (await this.ctx.sessionPersistence.stat(SessionId(sessionId))) !== undefined
   }
 
   async create(spec: AgentSpec): Promise<Agent> {
-    const handle = await this.ctx.agents.createAgent(this.ctx, {
+    const handle = await this.ctx.agents.create({
       sessionId: SessionId(spec.sessionId),
       meta: { cwd: spec.cwd, agentPreset: spec.role === "worker" ? WORKER_PRESET : ROUTER_PRESET },
+      agentOptions: this.model,
       setup: agentCtx => this.setup(agentCtx, spec),
     })
     return this.wrap(handle)
   }
 
   async resume(spec: AgentSpec): Promise<Agent> {
-    const handle = await this.ctx.agents.resume(this.ctx, {
+    const handle = await this.ctx.agents.resume({
       resumeSessionId: SessionId(spec.sessionId),
       setup: agentCtx => this.setup(agentCtx, spec),
     })
@@ -45,17 +57,17 @@ export class DshAgentLoop implements AgentLoop {
   private setup(agentCtx: Context, spec: AgentSpec): void {
     agentCtx.systemPrompt.section({ name: "hnu-exec", order: 9999, interpolate: false, text: () => spec.prompt, ...(spec.role === "router" ? { complete: true } : {}) })
     for (const tool of spec.tools) this.registerTool(agentCtx, tool)
-    const allow = [...NATIVE_TOOLS[spec.role], ...spec.tools.map(t => t.name)]
-    agentCtx.tools.restrict({ allow })
-    if (spec.role === "worker" && spec.cwd) {
-      // Worker 的业务写入只在本工单工作区内（原生 write/edit/bash），超出由预设沙盒约束。
-    }
+    // 只限制全局原生工具（同 DSSA 取已装工具的交集）；Agent 作用域注册的 HNU 工具不受限制，无需列入。
+    agentCtx.tools.restrict({ allow: NATIVE_TOOLS[spec.role].filter(name => agentCtx.tools.get(name) !== undefined) })
+    // Router 只判断去向：bash 仅用于只读查看，写入与改动一律拒绝。
+    if (spec.role === "router") agentCtx.tools.guard(execution => routerBashGuard(execution))
   }
 
   private registerTool(agentCtx: Context, tool: Tool): void {
     agentCtx.tools.register({
       name: tool.name, description: tool.description, parameters: tool.parameters,
-      output: { schema: { type: "object", additionalProperties: true }, render: (_a, value) => [{ type: "text", text: JSON.stringify(value) }] },
+      // 空 schema 接受任意 JSON：readCandidateTickets 按接口文档返回数组。
+      output: { schema: {}, render: (_a, value) => [{ type: "text", text: JSON.stringify(value) }] },
       execute: args => tool.execute(args),
     })
   }

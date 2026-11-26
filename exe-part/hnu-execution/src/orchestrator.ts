@@ -1,6 +1,7 @@
 // 执行宿主：Router / Worker 的生命周期、工单操作、通知处理与下载流程。
 // 单写者：宿主写固定头、session 及用户操作节点；Worker 用工具写 input/result/blocked/unblocked/note。
 import { join } from "node:path"
+import { mkdir } from "node:fs/promises"
 import { Conflict, Files } from "./files.ts"
 import { Tickets } from "./tickets.ts"
 import { Notifications } from "./notifications.ts"
@@ -70,7 +71,7 @@ export class Orchestrator {
     const sessionId = routerSessionId(packageId)
     const ticketId = newTicketId(packageId)
     const binding: RouterBinding = { package_id: packageId, session_id: sessionId, superdot: this.superdot, new_ticket_id: ticketId, ...(notification ? { notification } : {}) }
-    const tools = routerTools({ msg: this.store, tickets: this.tickets, notices: this.notices, packageId, routerSessionId: sessionId })
+    const tools = routerTools({ msg: this.store, tickets: this.tickets, notices: this.notices, packageId, routerSessionId: sessionId, newTicketId: ticketId, searched: { value: false } })
     const agent = await this.spawn({ sessionId, role: "router", cwd: this.superdot, prompt: this.prompts.router, tools })
     await agent.send(deliveryRequestId(sessionId, "package", packageId), JSON.stringify(binding), "queue")
     const end = await agent.idle()
@@ -198,6 +199,7 @@ export class Orchestrator {
   private async deliverWorker(ticketId: string, input: WorkerInput): Promise<void> {
     const sessionId = workerSessionId(ticketId)
     const original = originalId(input)
+    await mkdir(this.workspace(ticketId), { recursive: true }) // Worker 以工作区为 cwd，需先建目录
     const binding: WorkerBinding = {
       ticket_id: ticketId, session_id: sessionId, superdot: this.superdot,
       ticket_path: this.files.ticketPath(ticketId), workspace: this.workspace(ticketId),
@@ -205,7 +207,8 @@ export class Orchestrator {
     }
     const tools = workerTools({
       msg: this.store, tickets: this.tickets, notices: this.notices, ticketId,
-      workspace: this.workspace(ticketId), authorizeDownload: raw => this.allowed.has(raw),
+      workspace: this.workspace(ticketId), superdot: this.superdot, noteId: binding.note_id, sessionId,
+      authorizeDownload: raw => this.allowed.has(raw),
     })
     const spec: AgentSpec = { sessionId, role: "worker", cwd: this.workspace(ticketId), prompt: this.prompts.worker, tools }
     const exists = await this.loop.exists(sessionId)

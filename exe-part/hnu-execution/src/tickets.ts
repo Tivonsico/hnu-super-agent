@@ -78,6 +78,7 @@ export class Tickets {
   }
 
   ticket = (id: string): Promise<Ticket | undefined> => this.files.ticket(id)
+  operation = (id: string): Promise<Record<string, unknown> | undefined> => this.files.operation(id)
   async all(): Promise<Ticket[]> {
     const out: Ticket[] = []
     for (const id of await this.files.ticketIds()) { const t = await this.files.ticket(id); if (t) out.push(t) }

@@ -6,6 +6,7 @@ import type { Tickets } from "./tickets.ts"
 import type { Tool } from "./ports.ts"
 import type { Notification } from "./io.ts"
 import type { StoreError } from "./types.ts"
+import { checkAppend, checkCreate, checkMerge, explain, type AppendCtx } from "./validate.ts"
 
 const str = { type: "string", minLength: 1, pattern: "\\S" }
 const id = { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*$" }
@@ -13,10 +14,10 @@ const obj = (properties: object, required: string[]): object =>
   ({ type: "object", properties, required, additionalProperties: false })
 
 // 当轮上下文：Router 侧有包与 Router Session；Worker 侧有工单、工作区与下载授权核验。
-export type RouterCtx = { msg: MessageTools; tickets: Tickets; notices: Notifications; packageId: string; routerSessionId: string }
+export type RouterCtx = { msg: MessageTools; tickets: Tickets; notices: Notifications; packageId: string; routerSessionId: string; newTicketId: string; searched: { value: boolean } }
 export type WorkerCtx = {
   msg: MessageTools; tickets: Tickets; notices: Notifications
-  ticketId: string; workspace: string
+  ticketId: string; workspace: string; superdot: string; noteId: string; sessionId: string
   authorizeDownload(rawId: string): boolean
 }
 
@@ -50,14 +51,18 @@ export function routerTools(ctx: RouterCtx): Tool[] {
       name: "readCandidateTickets",
       description: "列出全部可见工单的标题与简述，供判断新建或归入。",
       parameters: obj({}, []),
-      execute: () => ctx.tickets.candidates(),
+      execute: async () => { ctx.searched.value = true; return ctx.tickets.candidates() },
     },
     {
       name: "createTicket",
       description: "确认需要新建工单后，按字段建单并写入首个 requirement 节点。",
       parameters: obj({ package_id: str, ticket_id: id, title: str, description: str, requirement: str },
         ["package_id", "ticket_id", "title", "description", "requirement"]),
-      execute: a => ctx.tickets.create(a as never, ctx.routerSessionId),
+      execute: a => {
+        const args = a as never
+        const bad = checkCreate(args, { packageId: ctx.packageId, ticketId: ctx.newTicketId, searched: ctx.searched.value })
+        return bad ? Promise.resolve(bad) : ctx.tickets.create(args, ctx.routerSessionId)
+      },
     },
     recordNotification(ctx, "router"),
   ]
@@ -88,14 +93,25 @@ export function workerTools(ctx: WorkerCtx): Tool[] {
           refs: { type: "array" },
         }, ["node_id", "kind", "text", "refs"]),
       }, ["ticket_id", "node"]),
-      execute: a => ctx.tickets.append(a as never, ctx.workspace),
+      execute: async a => {
+        const args = a as never
+        const checked = await checkAppend(args, ctx as AppendCtx)
+        if ("code" in checked) return { ...checked, detail: explain(checked) }
+        const r = await ctx.tickets.append({ ticket_id: ctx.ticketId, node: checked.node }, ctx.workspace)
+        return r.code === "OK" || r.code === "REPLAYED" ? r : { ...r, detail: explain(r) }
+      },
     },
     {
       name: "mergeTickets",
       description: "把一张工单并入另一张，写 merge_in 与 merge_out 两侧节点。",
       parameters: obj({ source_ticket_id: id, target_ticket_id: id, operation_id: str },
         ["source_ticket_id", "target_ticket_id", "operation_id"]),
-      execute: a => ctx.tickets.merge(a as never),
+      execute: async a => {
+        const args = a as { source_ticket_id: string; target_ticket_id: string; operation_id: string }
+        const saved = await ctx.tickets.operation(args.operation_id)
+        const bad = checkMerge(args, { ticketId: ctx.ticketId, saved })
+        return bad ? { ...bad, detail: explain(bad) } : ctx.tickets.merge(args)
+      },
     },
     recordNotification(ctx, "worker"),
   ]

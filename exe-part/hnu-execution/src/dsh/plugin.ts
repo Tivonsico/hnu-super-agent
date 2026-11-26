@@ -6,19 +6,22 @@ import { MessageTools } from "../message-tools.ts"
 import { Orchestrator } from "../orchestrator.ts"
 import { Http, route } from "../http.ts"
 import { DshAgentLoop } from "./loop.ts"
+import { loadPrompts } from "../prompts.ts"
 import type { MessageStore } from "../ports.ts"
 import type { Prompts } from "../orchestrator.ts"
 
-export type HnuConfig = { superdot: string; prompts: Prompts; store: MessageStore }
+// prompts 省略时从 prompts/ 加载角色模板并注入 MEMORY.md。
+export type HnuConfig = { superdot: string; store: MessageStore; prompts?: Prompts }
 
 export const name = "hnu-execution"
 export const inject = ["agents", "sessionPersistence", "tools", "systemPrompt", "webServer"]
 
-export function apply(ctx: Context, config: HnuConfig): void {
+export async function apply(ctx: Context, config: HnuConfig): Promise<void> {
   const files = new Files(config.superdot)
+  const prompts = config.prompts ?? await loadPrompts(config.superdot)
   const o = new Orchestrator({
     superdot: config.superdot, files, loop: new DshAgentLoop(ctx),
-    store: new MessageTools(config.store), prompts: config.prompts,
+    store: new MessageTools(config.store), prompts,
   })
   const http = new Http(o)
   // 对外接口只在回环 Web 服务上提供。
