@@ -1,0 +1,37 @@
+import java.util.Properties
+
+plugins { id 'com.android.application' }
+
+def pairingProperties = new Properties()
+def pairingFile = rootProject.file('pairing.properties')
+if (pairingFile.exists()) pairingFile.withInputStream { pairingProperties.load(it) }
+def defaultServer = (pairingProperties['server'] ?: '').toString().replace('\\', '\\\\').replace('"', '\\"')
+
+ def signingProperties = new Properties()
+ def signingFile = rootProject.file('keystore.properties')
+ if (signingFile.exists()) signingFile.withInputStream { signingProperties.load(it) }
+
+android { namespace 'com.noticehub.app'; compileSdk 35; buildToolsVersion '35.0.0'
+    defaultConfig { applicationId 'com.noticehub.app'; minSdk 23; targetSdk 35; versionCode 19; versionName '1.1.0'; buildConfigField 'String', 'PAIR_SERVER', '"' + defaultServer + '"'
+    buildConfigField 'String', 'DEFAULT_SERVER', '"' + defaultServer + '"' }
+    buildFeatures { buildConfig true }
+    signingConfigs {
+        release {
+            if (signingFile.exists()) {
+                storeFile file(signingProperties['storeFile'])
+                storePassword signingProperties['storePassword']
+                keyAlias signingProperties['keyAlias']
+                keyPassword signingProperties['keyPassword']
+            }
+        }
+    }
+    buildTypes { release { signingConfig signingConfigs.release; minifyEnabled false } }
+}
+
+dependencies {
+    // zxing-android-embedded 4.3.0 的 POM 只声明 com.google.zxing:core，没有声明它自己
+    // 在 CaptureManager 里用到的 androidx.core（ContextCompat/ActivityCompat）。
+    // 缺了它，点扫码进 CaptureActivity.onResume 会 NoClassDefFoundError 直接闪退。
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'androidx.core:core:1.13.1'
+}

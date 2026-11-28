@@ -1,0 +1,703 @@
+# SuperDot HTTP 接口与命令行参考
+
+Day 2 的包级交接、原件读取和工单转发见 [三方联调](../guides/day2-integration.md)。
+
+适用版本：`1.1.0`（`noticehub/platform/version.py` 的 `APP_VERSION`）。
+
+本页列出消息服务提供的接口及执行宿主的包接管地址。
+
+## 路由入口
+
+Web 路由以 [routes.py](../../../noticehub/web/routes.py) 为准。精确路径和前缀路径分别登记，每条包含处理方法和是否免鉴权。新增或移除接口时一起更新本页。
+
+## 消息包、工单与通知
+
+这些接口沿用网页鉴权。POST 请求使用 `Content-Type: application/json`。浏览器发送 `Origin` 时，它必须与消息服务的访问地址一致。执行宿主读取消息服务时可以使用 `X-Token`。
+
+| 方法 | 路径 | 参数 | 回执 |
+| --- | --- | --- | --- |
+| `GET` | `/api/execution/status` | 无 | `{configured, artifacts_available}`，分别表示执行地址和成果目录是否已配置。 |
+| `GET` | `/api/packages/{id}` | 消息包 ID | `{code:"OK",records,missing_refs}`。每条记录的 `package_role` 表示触发消息（`trigger`）、窗口内后续消息（`followup`）或回看历史（`history`）。手动任务的正文和附件均为 `trigger`。未封包或不存在回 404。 |
+| `POST` | `/api/raw/batch` | `{raw_ids: string[]}` | 同上。去重后按原发送时刻排序，同时刻保留首次出现顺序。 |
+| `POST` | `/api/raw/attachments` | `{operation_id,filename,content_base64}`，解码后每件上限 10 MiB | 首次回 201 `{code:"OK",ref:{id}}`，重放回 200 `REPLAYED`。 |
+| `POST` | `/api/raw/download` | `{raw_id,authorized?}`，另需执行宿主的 Bearer 令牌 | `{code:"OK",file_path}`。`file_path` 是同机可用的绝对路径。 |
+| `POST` | `/api/packages` | `{kind:"new_task",operation_id,text?,attachment_refs?}`，正文或附件至少一项 | 首次回 202 `QUEUED` 和 `package_ref`，重放回 200 `REPLAYED`。 |
+| `GET` | `/api/tickets` | 无 | 执行端工单列表。 |
+| `GET` | `/api/tickets/{id}` | 执行端工单 ID | `{code:"OK",ticket}`。 |
+| `POST` | `/api/tickets/actions` | `operation`、`operation_id` 及操作字段 | 由执行端确认操作，保留其状态码和回执。 |
+| `GET` | `/api/notifications` | `state` 可选，取 `pending` 或 `handled` | 执行端通知列表。 |
+| `POST` | `/api/notifications/{id}/handle` | 通知 ID，JSON 对象 `{}` 或 `{answer}` | 执行端处理回执。 |
+| `GET` | `/api/artifacts/{ticket_id}/{filename}` | 执行端成果节点中登记的文件 | 附件字节。部署需配置 `NOTICEHUB_EXECUTION_DATA_ROOT`。 |
+
+执行侧 Router 使用既有的 `createTicket({package_id,ticket_id,title,description,requirement})` 登记 AI 从原包归纳的标题、简述和要求。工单前端从 `GET /api/tickets[/{id}]` 读取 `title`、`description.text` 及首个 `requirement` 节点。未取得 AI 字段时，已有关联包可按命中原文截取展示。
+
+工单操作支持 `supplement`、`feedback`、`stop`、`resume`、`recover`、`merge`、`confirm`。请求超时后用相同的 `operation_id` 和原内容重试。对于新任务和浏览器上传，复用操作 ID 提交不同内容会返回 409。待下载的 QQ 附件需由执行宿主核对用户许可后发送 `authorized: true`。
+
+`POST /api/router/notify` 由执行宿主提供。消息层只传 `{package_ref:{id}}`。看门狗收到 HTTP 200 且回执包 ID 匹配、`code` 为 `OK` 或 `REPLAYED` 时才结束排队。部署和权限细节见 [Day 2 联调](../guides/day2-integration.md)。
+
+## 1. 通用约定
+
+### 1.1 鉴权
+
+令牌来自 `.env` 的 `NOTICEHUB_WEB_TOKEN`（旧名 `QQ_DIGEST_WEB_TOKEN`）。三种带法，按判定顺序（`noticehub/web/webapp.py:1691`）：
+
+1. `Cookie: nh_session=<值>` —— 会话 Cookie，值是 `HMAC(token, b"nh-session-v1")` 的十六进制（`webapp.py:87`）。确定性 HMAC，重启后旧 Cookie 仍有效。
+2. `X-Token: <token>` —— 请求头。
+3. `?token=<token>` —— 查询参数。命中后会在响应里下发 `Set-Cookie`，后续请求可以不带。
+
+令牌为空时（只可能出现在绑定环回的部署），**只放行环回来源**（`127.0.0.1` / `::1` / `::ffff:127.0.0.1`）。
+
+免鉴权接口用于健康检查、静态资源、配对和首次引导。实际清单以路由表的免鉴权标记为准。
+
+鉴权失败：
+
+```json
+{"ok": false, "error": "invalid token"}
+```
+
+`Accept` 含 `text/html` 时（浏览器直接打开）回 401 的 HTML 说明页而不是 JSON（`webapp.py:3481`）。
+
+### 1.2 错误与限流
+
+- 未匹配到路由：`404 {"ok": false, "error": "not found"}`。
+- 爆破防护：同一来源 60 秒内失败 30 次（`AUTH_FAILURE_LIMIT`，`webapp.py:75`）后直接 `429 {"ok": false, "error": "尝试过于频繁，请稍后再试"}`，连比对都不做（`webapp.py:1684`）。
+- 一般 POST 请求体上限为 64 KiB。原始附件上传使用单独的上限，见消息包接口。
+- 多数接口失败时**仍然回 200**，用 `ok: false` 表示业务失败（页面按 `ok` 分支）。带明确状态码的是：参数错 400、鉴权 401、限流/配对频繁 429、任务不存在 404、模块不可用 503、上游失败 502。
+- 所有 JSON 响应带 `Cache-Control: no-store`。
+
+### 1.3 返回体形状约定
+
+成功后多数接口含 `"ok": true`。列表型接口给 `items` 或 `groups`；状态型接口给 `state` + `detail` + `action`（`state` 只有四种：`off` / `needs_setup` / `ready` / `error`）。
+
+有几处**故意不带 `ok`**：`GET /api/meta`、`GET /api/tasks`、`GET /api/notices`、`GET /api/settings` 直接返回业务结构，失败时才补 `{ok: false, error}`。判断成功与否以各表为准，别统一按 `ok` 写死。
+
+## 2. 概览与状态
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/overview` | 需要 | — | `{ok, sources}`，`sources` 键：`qq`、`napcat`、`wechat`、`dingtalk`、`chaoxing`、`funnel`、`push`，每项 `{state, label, detail, action}` |
+| `GET` | `/api/meta` | 需要 | — | `{groups, channels, insights, reminders, started_at, push_budget, quiet_hours, channel, web_port, web_port_source, push, push_help, llm, providers, stats}`，共 15 键，**不带 `ok`** |
+| `GET` | `/api/setup/status` | 需要 | — | `{ok, platforms}`，`platforms` 键：`qq`、`wechat`、`dingtalk`、`chaoxing`、`push`、`llm`；每项含 `configured`、`status`，另按平台带 `headline`/`action`（下一步该点什么），`qq` 另有 `engine_state`、`login_state`，`push` 另有 `channels`，`llm` 另有 `provider` |
+| `GET` | `/api/selfcheck` | 需要 | — | `{ok, items[], checking, cached, last_push_at}`，`items[]` 每项 `{key, label, state, value, hint}` |
+| `GET` | `/api/health` | **公开** | — | `200/503 {ok, service, database, receivers{dingtalk,wechat,chaoxing}, last_push_at, update_source, channels}` |
+| `GET` | `/health` | **公开** | — | 同上 |
+| `GET` | `/api/ping` | **公开** | — | 服务标识，用于探活。 |
+| `GET` | `/api/notices` | 需要 | — | `{items[], error?}`（推送记录） |
+| `GET` | `/api/config/audit` | 需要 | — | `{ok, items[]}`（只报已生效的值，不重复探测） |
+
+行为要点：
+
+- **`/api/overview` 是通道判定的唯一来源**：设置页、服务自检、合并向导都读它，三处的结果因此一致。它不自己探测：自检已经算过的通道状态会挂在 `self._precomputed_status` 上被复用（`webapp.py:2047`），避免一次请求里把同一批外部探测跑两遍。
+- **`/api/health` 会真查库**（`SELECT 1`），进程活着但库读不了时回 503（`webapp.py:2468`）。它只回粗粒度状态，不暴露路径、令牌、群 ID——这是公网可达的接口。`receivers` 里 `idle`（一次都没跑过）算 `unknown`，不给绿点。
+- **`/api/selfcheck` 是单飞的**：同一时刻只算一遍，并发来的第二次等第一次算完复用结果（`webapp.py:2837`），最多等 `SELFCHECK_WAIT_SECONDS = 30` 秒。复用命中时 `cached: true`。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/overview?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/meta?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/setup/status?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/selfcheck?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/health"                    # 免鉴权
+curl.exe -s "http://127.0.0.1:8766/health"
+curl.exe -s "http://127.0.0.1:8766/api/notices?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/config/audit?token=<token>"
+```
+
+## 3. 待办兼容接口
+
+Android、日历和已有待办客户端仍可使用这一组路径。正式工单接口见本页上方。
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/tasks` | 需要 | — | `{headline, subline, progress, stats{total,candidate,open,done,dismissed,expired,overdue}, candidates[], today[], week[], later[], done[], pinned[], deadline_views{today[],future[]}}` |
+| `POST` | `/api/tasks/create` | 需要 | `summary`（必填，≤200 字）、`deadline`（可选） | `{ok, task_id, summary, deadline}` |
+| `POST` | `/api/tasks/pin` | 需要 | `task_id`、`pinned`（必须是布尔） | `{ok, …}`；任务不存在回 404 |
+| `POST` | `/api/tasks/urgent` | 需要 | `task_id`、`urgent`（`true`/`false`/`null`） | `{ok, …}`；不存在回 404 |
+| `POST` | `/api/tasks/<id>` | 需要 | `action`、`done`、`correction`、`value` | `{ok, id, action, done, status}` |
+
+行为要点：
+
+- `deadline_views` 供待办概览使用。服务端以本地日期划分未完成工单，`today` 收录今天截止的工单，`future` 收录明天及以后截止的工单。
+- `/api/tasks/<id>` 的 `action` 只有六个合法值（`noticehub/application/tasks.py:65`）：`confirm`、`dismiss`、`done`、`reopen`、`snooze`、`delete`。别的值回 `400 unsupported action`。
+- 只给 `done` 不给 `action` 时，`true` 当 `done`、`false` 当 `reopen`（`tasks.py:93`）。
+- `action: "correct"` 走纠错分支（`webapp.py:4357`），需要 `correction`；`value` 可选。
+- **`snooze` 不接受自定义时间**：路由只透传 `done`，`until` 拿不到，一律用默认值=次日早晨的截止提醒时刻（`tasks.py:68`）。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/tasks?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/tasks/create?token=<token>" -H "Content-Type: application/json" --data-raw '{"summary":"交读书报告","deadline":"2026-11-05T23:59"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/tasks/pin?token=<token>" -H "Content-Type: application/json" --data-raw '{"task_id":"12","pinned":true}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/tasks/urgent?token=<token>" -H "Content-Type: application/json" --data-raw '{"task_id":"12","urgent":true}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/tasks/12?token=<token>" -H "Content-Type: application/json" --data-raw '{"action":"done"}'
+```
+
+## 4. 收件箱
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/inbox` | 需要 | `feed=packages` | `{ok,items,has_more}` |
+| `GET` | `/api/inbox` | 需要 | `verdict`（`notice`/`suspect`/`noise`/`promoted`/空）、`group_id`、`q`、`limit`（1–100，默认 50）、`offset`（默认 0） | `{ok, items[], counts, total}` |
+| `GET` | `/api/inbox/image` | 需要 | `msg_id`（必填、唯一） | 图片字节；缺失回 404 |
+| `POST` | `/api/inbox/promote` | 需要 | 单条记录的 `msg_id` | 本地预览入队，回 `{ok,decision,task_id}`。 |
+| `POST` | `/api/inbox/manual` | 需要 | `content`、可选 UUID `request_id` | 本地预览收录，回 `{ok,msg_id}`。 |
+
+行为要点：
+
+- `feed=packages` 列出封存包和已有单条记录，按收录日期倒序排列。支持 `source`、`q`、`day`（`YYYY-MM-DD`）、`limit` 和 `offset`。每个包有 `package_id`、`sealed_at`、`messages`、`context` 和 `context_package_refs`。单条记录的 `package_id`、`sealed_at` 和 `trigger_msg_id` 为空。前端将 `context` 和 `messages` 按收录次序一起展示，用 `trigger_msg_id` 标记触发消息。
+- `verdict=promoted` 是「已转待办」这个视图，不是第四种判定（`webapp.py:3183`）。
+- `counts` 无论筛选与否都返回全量四类计数；`total` 在带 `group_id`/`q` 时是实际重新数出来的，可能比 `counts` 小。
+- `items[]` 每项额外带 `has_image`（`webapp.py:3188`）。
+- `/api/inbox/image` 只提供登记在附件目录的图片。
+
+| 当前 `state` | 显示 | 操作 |
+| --- | --- | --- |
+| `sealed` | 已封包 | 查看原文 |
+| `recorded` | 已收录 | 查看原文。兼容单条记录 `can_submit=true` 时可提交给 Router |
+| `queued` | 排队中 | 查看原文 |
+| `linked` | 已关联工单 | 查看原文、通过 `task_id` 打开工单 |
+| `ignored` | 已忽略 | 查看原文 |
+
+当前列表读取已封存的包和已有单条记录。包的 `delivery_state` 为 `queued` 或 `accepted` 时，分别表示待接管和已接管。升级前未排队的旧包没有接管状态。接管后的工单关系从执行端的 `package_refs` 读取。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/inbox?verdict=notice&limit=20&token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/inbox/image?msg_id=123456&token=<token>" -o pic.jpg
+curl.exe -s -X POST "http://127.0.0.1:8766/api/inbox/promote?token=<token>" -H "Content-Type: application/json" --data-raw '{"msg_id":"123456"}'
+```
+
+工单原文链接使用 `GET /api/inbox?feed=packages&package_id={id}` 精确定位消息包，或使用 `msg_id={id}` 定位旧消息。
+
+### 本地预览
+
+本地预览用 `GET /api/work-orders` 读取工单，`GET /api/work-orders/events?id={id}` 读取节点事件。页面通过 `POST /api/work-orders/action` 保存人工操作。测试用 Router 和 Worker 分别调用 `GET /api/router/queue`、`GET /api/router/orders`、`POST /api/router/decide` 和 `POST /api/work-orders/worker`。预览使用本地工单 ID。正式执行端使用本页的 `/api/tickets` 接口。
+
+本地人工操作使用当前工单的 `id` 和 `revision`。 `supplement` 接受 `note`，保存记录并更新 `latest_supplement`；已完成工单收到补充后重新待接单，原成果仍可在历史节点中查看。 `confirm_result` 确认当前已交付的阶段成果，工单返回 `result_confirmed: true`。
+
+## 5. 历史回溯
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `POST` | `/api/history/fetch` | 需要 | `groups[]`、`since`、`until`（`YYYY-MM-DD`）、可选 `classify: true` | `{ok, started}`；启用 `classify` 时同一任务内筛选导入的消息；已有任务在跑回 409 |
+| `POST` | `/api/history/fetch/cancel` | 需要 | — | `{ok, cancelled}`；没在跑回 409 |
+| `GET` | `/api/history/fetch/status` | 需要 | — | `{running, stage, done, total, note, result, detail}` |
+
+行为要点：
+
+- 日期使用 `YYYY-MM-DD`。起始日期晚于结束日期时返回 400。
+- 取消接口在任务已结束时回 409。
+
+```powershell
+curl.exe -s -X POST "http://127.0.0.1:8766/api/history/fetch?token=<token>" -H "Content-Type: application/json" --data-raw '{"groups":["123456"],"since":"2026-10-01","until":"2026-10-25"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/history/fetch/cancel?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/history/fetch/status?token=<token>"
+```
+
+## 6. 日历与订阅
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/sync/info` | 需要 | — | `{ok, calendars[], …}`；拿不到地址回 503 |
+| `GET` | `/api/sync/qr.png` | 需要 | `text`（日历 URL，必填、唯一、≤512 字符） | PNG；参数错回 400 |
+| `GET` | `/api/sync/test` | 需要 | `url`（必须是本服务自己公布的地址之一） | `{ok, events, url}`；上游失败 502 |
+| `GET` | `/calendar.ics` | 需要 | — | iCalendar 文本 |
+| `GET` | `/calendar` | 需要 | — | 302 回首页 |
+
+行为要点：
+
+- `/api/sync/test` 只允许测**本服务公布过的**地址（局域网、Tailscale）以及 `127.0.0.1` / `localhost` 的同端口 `/calendar.ics`（`webapp.py:3039`）。它是个 SSRF 防护：拒绝任意外部 URL。
+- `/api/sync/qr.png` 只接受 `webcal:` / `http:` / `https:`，且不含凭据、不含空白字符。
+- `calendar.ics` 的 token 用的是同一个 `NOTICEHUB_WEB_TOKEN`，订阅地址里带着它——分享给别人等于分享令牌。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/sync/info?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/sync/qr.png?text=webcal%3A%2F%2F127.0.0.1%3A8766%2Fcalendar.ics%3Ftoken%3D<token>&token=<token>" -o cal.png
+curl.exe -s "http://127.0.0.1:8766/api/sync/test?url=http%3A%2F%2F127.0.0.1%3A8766%2Fcalendar.ics%3Ftoken%3D<token>&token=<token>"
+curl.exe -s "http://127.0.0.1:8766/calendar.ics?token=<token>" -o cal.ics
+curl.exe -s -o NUL -w "%{http_code}`n" "http://127.0.0.1:8766/calendar?token=<token>"
+```
+
+## 7. 自定义通知规则
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/lab/rules` | 需要 | — | `{ok, result}` |
+| `POST` | `/api/lab/rules` | 需要 | `rules[]` | `{ok, …}` |
+
+行为要点：
+
+- 自动整理规则默认开（`NOTICEHUB_LAB_RULES` 默认 `1`），关闭后，规则读写返回 403。
+- 参数非法回 400，模块内部失败回 503。这一层会把底层返回的 `{ok: false, error}` 摊平，避免把「第 2 条规则非法」当成保存成功。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/lab/rules?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/lab/rules?token=<token>" -H "Content-Type: application/json" --data-raw '{"rules":[]}'
+```
+
+## 8. QQ / NapCat
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/napcat/status` | 需要 | — | `{ok, stage, online, user_id, nickname, napcat_installed, napcat_running, napcat_root, qr_stamp, qr_age_seconds, qr_stale, waiting_seconds, good, error}` |
+| `GET` | `/api/napcat/qrcode` | 需要 | — | PNG；没有二维码回 404 |
+| `GET` | `/api/qq/conversations` | 需要 | 本机 Framework 模式 | `{ok,conversations,partial}`，包括群聊和可订阅的私聊。 |
+| `GET` | `/api/napcat/groups` | 需要 | — | `{ok, groups[{group_id, name, member_count, selected}]}` |
+| `GET` | `/api/napcat/doctor` | 需要 | — | `{ok, steps[], hint, broken, error}` |
+| `GET` | `/api/groups/suggest` | 需要 | — | `{ok, source, groups[], counts, error}` |
+| `GET` | `/api/qq/groups/status` | 需要 | — | `{ok, group_count, is_fetching, last_attempt_at, last_success_at, last_error, next_run_at}` |
+| `GET` | `/api/napcat/install/status` | 需要 | — | `{ok, running, stage, done, total, note, result, downloaded_bytes, total_bytes, extracted, entries}` |
+| `POST` | `/api/napcat/install` | 需要 | `accept_sha256`（首次确认指纹时带） | `{ok, installed, already_installed, root, version, bytes, error}` |
+| `POST` | `/api/napcat/launch` | 需要 | `uin`（可选） | `{ok, already_running, pid, command[], profile_dir, boot}` |
+| `POST` | `/api/napcat/restart` | 需要 | `uin`（可选） | `{ok, stopped[], already_stopped, pid, api_up, waiting_for_login}` |
+| `POST` | `/api/napcat/connect` | 需要 | —（请求体不读内容） | `{ok, api_url, tried[], persisted, persist_error, status}` |
+| `POST` | `/api/napcat/autosetup` | 需要 | `accept_sha256`（可选） | `{ok, steps[], qrcode_path, uin, applied_via, restart_required, stage}` |
+
+行为要点：
+
+- `stage` 是这套接口的核心状态机：`online` / `waiting_qr` / `waiting_login` / `stopped` / `not_installed` / `error`。`waiting_qr` 时 `qr_age_seconds` 说明码有多旧，`qr_stale` 表示该换码了。
+- **`/api/napcat/install` 是同步的**：请求会一直等到装完（可能几分钟）才返回最终结果，期间进度写进任务快照，前端并行轮询 `/api/napcat/install/status` 显示百分比（`webapp.py:4158`）。超时或断连时页面看着像卡住，这是设计如此。
+- `POST /api/napcat/connect` 只读 NapCat 自己的配置、**绝不改**，写回的是我们自己的 `NOTICEHUB_NAPCAT_API_URL`（`webapp.py:4252`）。写不进 `.env` 时仍返回 `ok: true`，但 `persisted: false` 并带 `persist_error`——重启会回到旧地址。
+- 四个「改本机状态」的接口（install/launch/restart/autosetup）**不做确认校验**，靠页面按钮；它们会真的装软件、起进程。
+- `POST /api/napcat/connect` 成功后会清 NapCat 状态缓存，下一轮 `/api/napcat/status` 立刻反映新地址。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/napcat/status?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/napcat/qrcode?token=<token>" -o qr.png
+curl.exe -s "http://127.0.0.1:8766/api/napcat/groups?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/napcat/doctor?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/groups/suggest?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/qq/groups/status?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/napcat/install/status?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/napcat/install?token=<token>" -H "Content-Type: application/json" --data-raw '{"accept_sha256":"<sha256>"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/napcat/launch?token=<token>" -H "Content-Type: application/json" --data-raw '{"uin":"10001"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/napcat/restart?token=<token>" -H "Content-Type: application/json" --data-raw '{"uin":"10001"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/napcat/connect?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/napcat/autosetup?token=<token>" -H "Content-Type: application/json" --data-raw '{}'
+```
+
+## 9. 钉钉
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/dingtalk/status` | 需要 | — | `{ok, enabled, running, groups, state, scan_state, scan_stage, scan_started_at, scan_elapsed_seconds}` |
+| `GET` | `/api/dingtalk/groups` | 需要 | — | `{ok, groups[], suggest_source, suggest_error}`；失败时 `ok:false` + `category` |
+| `POST` | `/api/dingtalk/scan` | 需要 | — | `{ok, started, source, scan_state, scan_stage, scan_elapsed_seconds, category?, message?}` |
+
+行为要点：
+
+- `state` 四种：`未启用` / `已连接实时监听 N 个群` / `钉钉已启用，监听未启动` / `已启用，但还没勾群`（白名单为空时）。
+- `POST /api/dingtalk/scan` 的 `category` 有四类：`scan_start_failed`（抛异常）、`disabled`（没启用）、`no_groups_selected`（没选群）、`scanner_unavailable`（扫描器没起来）。前三类属于「还没配好」，仍回 `ok: true`，只有 `scanner_unavailable` 才 `ok: false`（`webapp.py:3777`）。
+- 幂等：扫描已在跑时回 `{ok: true, started: false, already_running: true}`，不重复起。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/dingtalk/status?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/dingtalk/groups?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/dingtalk/scan?token=<token>"
+```
+
+## 10. 微信
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/wechat/status` | 需要 | — | `{ok, enabled, running, available, groups, state, hint, manual_key, storage_dir, interval_seconds, last_read_at, last_read_seconds, last_error, error_category, error_hint, scan_state, scan_stage, scan_started_at, scan_elapsed_seconds}` |
+| `GET` | `/api/wechat/groups` | 需要 | — | `{ok, groups[{id, name, alias, selected}], suggest_source, suggest_error, error?, error_category?, error_hint?}` |
+| `POST` | `/api/wechat/scan` | 需要 | — | 同钉钉 `/scan` 的形状，`source: "wechat"` |
+
+行为要点：
+
+- **`/api/wechat/groups` 有副作用**：先让微信存储位置探测缓存失效，再真读一次群名（首次要扫微信内存，可能好几分钟），并把结果写进进程内的读取状态（`webapp.py:3254`、`:3274`）。它不是纯查询接口，别在轮询里调。
+- 0 个群时一并返回 `error`、`error_category`、`error_hint`——分类由 `wechat_receiver` 出，`error_hint` 是给用户看的下一步。
+- `POST /api/wechat/scan` 与 `/api/dingtalk/scan` **共用同一个处理方法**（`routes.py:119`），按路径前缀区分来源。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/wechat/status?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/wechat/groups?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/wechat/scan?token=<token>"
+```
+
+## 11. 学习通
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/chaoxing/status` | 需要 | — | `{ok, has_cookie, expired, last_sync_at, last_error, auto_cookie_supported, auto_cookie_reason, …}` |
+| `GET` | `/api/chaoxing/courses` | 需要 | — | `{ok, courses}`；没填凭据 400，登录失效 502 |
+| `GET` | `/api/chaoxing/cookie/status` | 需要 | — | `{ok, has_cookie, result, last_checked_at, error}` |
+| `POST` | `/api/chaoxing/cookie/validate` | 需要 | — | `{ok, result, has_cookie, last_checked_at, error}` |
+| `POST` | `/api/chaoxing/auto_cookie` | 需要 | — | `{ok, saved, source, courses, course_items, attempts}` 或 `{ok:false, category, error, detail, next_step, attempts}` |
+
+行为要点：
+
+- `/api/chaoxing/auto_cookie` 会从浏览器读登录信息并**落盘**：写 `data/chaoxing.cookie`，同时改内存里的 `chaoxing_cookie` 和 `chaoxing_enabled = True`，再重载读取器（`webapp.py:3691`）。这是写接口。
+- 自动检测失败会返回 `unsupported_platform`、`browser_unavailable`、`browser_locked`、`no_chaoxing_cookie` 或 `decrypt_failed`。其他错误归为 `browser_unavailable`。响应附有 `next_step`。
+- `POST /api/settings` 同时收到 `chaoxing_cookie` 和 `chaoxing_verify_cookie: true` 时，会先验证凭证并读取课程，成功后才保存并返回 `course_items`。
+- 失败时**状态码仍是 200**，用 `ok` 判断成败。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/chaoxing/status?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/chaoxing/courses?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/chaoxing/cookie/status?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/chaoxing/cookie/validate?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/chaoxing/auto_cookie?token=<token>"
+```
+
+## 12. 配对与公网
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/pair/info` | 需要 | — | `{ok, public_url, public_enabled, tailscale_ready, base, lan[], candidates[], qr_error, firewall, steps[], no_public_hint}` |
+| `GET` | `/api/pair/pending` | 需要 | — | `{ok, pending[]}` |
+| `GET` | `/api/pair/status` | **公开** | `code`（≤16 字符）、`secret`（≤128 字符） | `{ok, status}`；批准后额外带 `token`；无效回 404 |
+| `POST` | `/api/pair/start` | **公开** | —（设备名/来源由服务端取） | `{ok, code, secret, …}`；同来源 10 分钟超 3 次回 429 |
+| `POST` | `/api/pair/approve` | 需要 | `code`（6 位数字） | `{ok, …}`；码不对 400 |
+| `POST` | `/api/pair/deny` | 需要 | `code`（6 位数字） | `{ok, …}` |
+| `POST` | `/api/pair/pending/clear` | 需要 | — | `{ok, cleared}` |
+| `POST` | `/api/session/exchange` | **公开** | `token` | `{ok}` + `Set-Cookie`；令牌错 401 |
+| `GET` | `/api/tunnel/status` | 需要 | — | `{ok, provider, state, installed, url, auth_url, message, retryable, providers, url_changes_on_restart}` |
+| `POST` | `/api/tunnel/stop` | 需要 | 无 | 停止当前公网通道。 |
+| `POST` | `/api/tunnel/start` | 需要 | `confirm: true`（必须）；`provider`（可选，`cloudflare`/`tailscale`，缺省取设置里选中的那条） | `{ok, provider, state, …}`；缺 confirm 回 400 |
+| `POST` | `/api/pair/public` | 需要 | —（旧接口，不要求 confirm） | 同 tunnel/start |
+| `GET` | `/api/app/qr.png` | 需要 | `base`（手机访问地址，必填、唯一） | PNG；参数错 400 |
+
+行为要点：
+
+- **配对状态机**：`POST /api/pair/start` 发 6 位码 + 32 字符 secret → 手机拿码和 secret 轮询 `/api/pair/status` → 电脑上 `approve`/`deny`。批准后 `/api/pair/status` 才把真令牌交出去（`webapp.py:2569`），这是手机拿到令牌的唯一路径。
+- `POST /api/pair/start` 是无鉴权接口，所以有频控：同一来源 10 分钟内最多 3 次，超了 429（`webapp.py:3544`）。
+- **`/api/tunnel/start` 必须带 `{"confirm": true}`**，否则 400 + `needs_confirm: true`（`webapp.py:3826`）。老接口 `/api/pair/public` 为兼容旧页面**不要求** confirm，但两者走同一套执行路径，审计一样记。
+- **没有令牌时不许开公网**：`/api/tunnel/start` 与 `/api/pair/public` 在令牌为空时回 400（`webapp.py:3818`）。Funnel 反代后来源变成 `127.0.0.1`，正好命中「空 token 放行环回」，整站就成了无鉴权公开。
+- 开通是**异步**的：接口只把后台任务起起来就返回，页面轮询 `/api/tunnel/status`（状态机含 `installed`、`auth_url`、`retryable`）。
+- **两条通道**：默认 `cloudflare`（免注册，地址每次重启都变，`url_changes_on_restart: true`；要 55 MB 的 cloudflared，首次开工会下约 19 MB 的压缩包，Gitee 优先、兜底 GitHub 的 55 MB），要固定地址就切 `tailscale`（Funnel，要登录账号）。`providers` 里是两条通道各自的状态，页面用它在胶囊按钮上标「已安装/已开通」。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/pair/info?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/pair/pending?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/pair/status?code=123456&secret=<secret>"          # 免鉴权
+curl.exe -s -X POST "http://127.0.0.1:8766/api/pair/start"                              # 免鉴权
+curl.exe -s -X POST "http://127.0.0.1:8766/api/pair/approve?token=<token>" -H "Content-Type: application/json" --data-raw '{"code":"123456"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/pair/deny?token=<token>" -H "Content-Type: application/json" --data-raw '{"code":"123456"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/pair/pending/clear?token=<token>"
+curl.exe -s -i -X POST "http://127.0.0.1:8766/api/session/exchange" -H "Content-Type: application/json" --data-raw '{"token":"<token>"}'
+curl.exe -s "http://127.0.0.1:8766/api/tunnel/status?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/tunnel/start?token=<token>" -H "Content-Type: application/json" --data-raw '{"confirm":true,"provider":"cloudflare"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/pair/public?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/api/app/qr.png?base=http%3A%2F%2F192.168.1.5%3A8766&token=<token>" -o app.png
+```
+
+## 13. 设置
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/settings` | 需要 | — | 托管偏好 + 各通道开关/白名单/别名/间隔 + `chaoxing_status` + `lab_*` |
+| `POST` | `/api/settings` | 需要 | 见下方「按组单独保存」 | `{ok, …}`；分组混在一起回 400 |
+| `POST` | `/api/settings/test-push` | 需要 | —（用当前配置） | `{ok, results[]}` |
+| `POST` | `/api/subscriptions` | 需要 | `groups[]`、`aliases{}` | `{ok, groups, applied}`；写 `.env` 失败回 400 |
+| `GET` | `/api/firewall/status` | 需要 | — | `{ok, port, state, message, at, checked}` |
+| `POST` | `/api/firewall/allow` | 需要 | `confirm: true`（必须） | `{ok, state: "pending", request_id, port}` |
+
+`POST /api/settings` 的「按组单独保存」——一次只能带一组，混带会被拒（`noticehub/web/settings_api.py:278-308`）：
+
+| 组 | 字段 |
+|---|---|
+| 托管 | `quit_qq`、`restore_qq`、`quit_restore_qq`、`auto_on_start`、`autostart` |
+| 回溯 | `catchup_enabled`、`catchup_hours` |
+| 推送通道 | `wxpusher_app_token`、`wxpusher_uids`、`wxpusher_topic_ids`、`serverchan_keys`、`pushplus_tokens`、`webhook_urls`（逐个含义见 18.2） |
+| AI 接入 | `llm_provider`、`llm_api_key`、`llm_model`、`llm_endpoint` |
+| 学习通 | `chaoxing_enabled`、`chaoxing_cookie`、`chaoxing_group_whitelist`、`chaoxing_clear_cookie` |
+| 钉钉 | `dingtalk_enabled`、`dingtalk_group_whitelist` |
+| 微信 | `wechat_enabled`、`wechat_group_whitelist`、`wechat_group_aliases`、`wechat_scan_interval_seconds`、`wechat_key`、`wechat_dir` |
+| NapCat | `napcat_dir` |
+| 自动整理规则 | `lab_rules` |
+
+默认 QQ 组包规则由 `GET /api/settings/package-rule` 读取，响应包含 `rule` 和已订阅的 `groups`。使用 `POST /api/settings/package-rule` 保存规则。`group_ids`、`roles`、`sender_ids` 和 `keywords` 为字符串数组，五个窗口参数以整数分钟或条数表示。取消所有群的选择即可停用新窗口。
+
+`GET /api/settings/screening` 读取通用规则和四个渠道的规则。用 `POST /api/settings/screening` 保存 `{keywords, windows, channels}`。渠道键为 `qq`、`wechat`、`dingtalk`、`chaoxing`。`windows` 与 QQ 组包规则的五个时间和条数参数同名。`inherit` 为真时使用通用关键词。QQ 开启继承时也使用通用组包时间，已订阅的私聊同时纳入组包。其他渠道用 `enabled` 开启组包，用 `keywords` 保存专属词，用 `senders` 按发送者 ID 或名称过滤，仅对已监听的会话或课程生效。
+
+`GET /api/settings/desktop-pet` 返回 `{ok,enabled,connected,visible,enhanced,preferences,message}`。用 `POST /api/settings/desktop-pet` 保存 `{enabled,preferences}`，其中 `preferences` 可省略，提供时包含布尔字段 `created`、`action`、`result`、`problem`、`speech`。该设置控制工单提醒。原生窗口显隐由桌宠配置负责。本机网页还可用 `{action:"preview"}` 或 `{action:"open-settings"}` 试播或打开桌宠设置。
+
+桌宠进程通过独立本机令牌读取 `GET /api/desktop-pet/state`，并用 `POST /api/desktop-pet/action` 打开工单入口或把原生便签转为消息包。转包按便签编号去重，提交到同一持久队列。
+
+行为要点：
+
+- 保存是**热更新**：写 `.env` 同时改进程内的 `Settings` 对象，多数设置保存即生效，不用重启（`settings_api.py:360`、`:472`、`:596`）。微信/钉钉/学习通保存后会重载各自的读取器（`reload_wechat` / `reload_dingtalk` / `reload_chaoxing`）。
+- **一处例外**：学习通那一组（`chaoxing_enabled`、`chaoxing_group_whitelist`）保存后只改内存和 `data/chaoxing.cookie`，`_save_chaoxing_settings`（`settings_api.py:554-586`）里没有 `update_env_file` 调用 —— 当前进程里立刻生效，但重启会回到 `.env` 里的旧值。
+- **`POST /api/firewall/allow` 不在服务进程里弹 UAC**：它写一个请求文件交给托盘执行，自己的 `state` 是 `pending`，页面轮询 `/api/firewall/status` 看结果（`webapp.py:3846`）。托盘没在跑时状态会落到 `unavailable`（「需要托盘程序在运行才能提权」）。
+- `/api/firewall/status` 的 `checked` 表示「本机到底读没读到防火墙规则清单」——读不到时不能把「没查成」当成「没放行」。
+- 测试/只读模式下，改本机网络设置的接口一律 403：「当前是测试/只读模式，改本机网络设置的操作已禁用。」
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/settings?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/settings?token=<token>" -H "Content-Type: application/json" --data-raw '{"dingtalk_enabled":true,"dingtalk_group_whitelist":["cid123"]}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/settings/test-push?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/subscriptions?token=<token>" -H "Content-Type: application/json" --data-raw '{"groups":["123456"],"aliases":{"123456":"学院通知群"}}'
+curl.exe -s "http://127.0.0.1:8766/api/firewall/status?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/firewall/allow?token=<token>" -H "Content-Type: application/json" --data-raw '{"confirm":true}'
+```
+
+## 14. 托管与首次打开
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/api/hosting/status` | 需要 | — | `{ok, user_qq_path, user_qq_pids[], user_qq_running, napcat_running, napcat_online, napcat_login_error, hosting_active, hosting_uin, hosting_since, groups_selected, error}` |
+| `POST` | `/api/hosting/start` | 需要 | `uin`（可选） | `{ok, …}` |
+| `POST` | `/api/hosting/stop` | 需要 | — | `{ok, …}` |
+| `GET` | `/api/onboarding` | **公开** | — | `{required, accepted_at}` |
+| `POST` | `/api/onboarding/accept` | **公开** | —（空体也行） | `{ok, accepted_at}` |
+
+行为要点：
+
+- `/api/hosting/start` 与 `/api/hosting/stop` **共用同一个处理方法**（`routes.py:85-86`），按路径结尾是否 `/start` 分流（`webapp.py:4101`）。空请求体按 `{}` 处理（`Content-Length: 0` 也收），但发坏 JSON 回 `400 bad json`。
+- `hosting_status` 里 `napcat_running`（端口开着）与 `napcat_online`（真的登录了）是两件事——6099 端口用户开日常 QQ 也会监听，不能据此判 NapCat 在跑（`noticehub/remote/hosting.py:396`）。
+- `/api/onboarding/accept` 是幂等的：已接受过就直接回原来的时间戳，不覆盖（`webapp.py:3533`）。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/api/hosting/status?token=<token>"
+curl.exe -s -X POST "http://127.0.0.1:8766/api/hosting/start?token=<token>" -H "Content-Type: application/json" --data-raw '{"uin":"10001"}'
+curl.exe -s -X POST "http://127.0.0.1:8766/api/hosting/stop?token=<token>" -H "Content-Type: application/json" --data-raw '{}'
+curl.exe -s "http://127.0.0.1:8766/api/onboarding"                                        # 免鉴权
+curl.exe -s -X POST "http://127.0.0.1:8766/api/onboarding/accept" -H "Content-Type: application/json" --data-raw '{}'
+```
+
+## 15. 备份
+
+`GET /api/backup` 需要网页鉴权，以 ZIP 下载 SQLite 在线备份。数据库不存在时返回 404 `database_missing`。备份包只包含数据库文件。
+
+## 16. 页面与静态资源
+
+| 方法 | 路径 | 鉴权 | 参数 | 返回 |
+|---|---|---|---|---|
+| `GET` | `/` | 需要 | — | 主页面 HTML（注入版本 badge、渠道色） |
+| `GET` | `/index.html` | 需要 | — | 同上 |
+| `GET` | `/setup` | 需要 | — | 302 回首页 |
+| `GET` | `/floatball` | 需要 | — | 浮球页 HTML |
+| `GET` | `/floatball.html` | 需要 | — | 同上 |
+| `GET` | `/icon.svg` | **公开** | — | SVG 图标（缓存 1 天） |
+| `GET` | `/manifest.webmanifest` | **公开** | — | PWA 清单 |
+| `GET` | `/sw.js` | **公开** | — | Service Worker 脚本 |
+| `GET` | `/workbench.css` | **公开** | — | 工单台样式表。 |
+| `GET` | `/js/*` | **公开** | — | `web_static/js/` 下的脚本，只允许该目录下 `.js` |
+
+行为要点：
+
+- `page.html` 里的脚本已拆到 `web_static/js/*.js`，由 `/js/*` 提供。打包时 `packaging/qq_live_digest.spec` 的 `datas` 必须包含整个 `web_static/js` 目录，漏了就是装完 404、公告和配对静默失效。
+- `/js/*` 做了目录逃逸防护：解析后父目录必须正好是 js_root，且后缀必须是 `.js`（`webapp.py:3457`）。
+
+```powershell
+curl.exe -s "http://127.0.0.1:8766/?token=<token>" -o page.html
+curl.exe -s -o NUL -w "%{http_code}`n" "http://127.0.0.1:8766/index.html?token=<token>"
+curl.exe -s -o NUL -w "%{http_code}`n" "http://127.0.0.1:8766/setup?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/floatball?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/floatball.html?token=<token>"
+curl.exe -s "http://127.0.0.1:8766/icon.svg"
+curl.exe -s "http://127.0.0.1:8766/manifest.webmanifest"
+curl.exe -s "http://127.0.0.1:8766/sw.js"
+curl.exe -s "http://127.0.0.1:8766/js/announce.js"
+```
+
+## 17. 命令行
+
+入口 `main.py`。子命令写在 `main.py:30` 的 `_COMMANDS` 表里（每项是「名字 / 帮助 / 处理函数 / 参数表」），`build_parser()`（`main.py:139`）按这张表拼出 argparse，所以表就是唯一的命令行契约。
+
+| 命令 | 参数 | 作用 |
+|---|---|---|
+| `--env <路径>` | 默认空（用项目根 `.env`） | **顶层参数，必须写在子命令前面**。指定 `.env` 文件 |
+| `run` | `--poll <秒>`（默认 0 = 读配置） | 常驻运行（定时拉取、生成摘要、推送） |
+| `tick` | `--no-bot` | 只执行一次调度；`--no-bot` 时不启动机器人，只处理库里已有消息 |
+| `preview` | `--limit <N>`（默认 0） | 预览待处理消息会被推成什么 |
+| `stats` | — | 查看统计 |
+| `show` | `--limit <N>`（默认 5） | 回看最近几条摘要及判断依据 |
+| `tasks` | `--all`、`--limit <N>`（默认 30）、`--import-existing`、`--days <N>`（默认 7）、`--reset` | 查看待办清单和手机访问地址；`--import-existing` 从历史摘要回填，`--reset` 先清库再回填 |
+| `catchup` | — | 从 NapCat 补采最近的历史群消息 |
+| `doctor` | `--online`、`--bundle [路径]` | 自检；`--online` 在线校验机器人凭证，`--bundle` 生成诊断包 zip（默认放桌面） |
+| `send-test` | `--wait <秒>`（默认 25） | 发一条测试推送，并等机器人就绪 |
+| `attach-test` | `[path]`、`--group`、`--file-id`、`--busid`、`--name` | 解析群文件/图片，只打印摘要不推送 |
+
+```powershell
+F:\notice-hub\qq-live-digest.exe --env F:\notice-hub\.env run
+```
+
+**`--env` 的位置是硬要求**：它是顶层参数，写在子命令后面会报 `unrecognized arguments: --env ...`（`packaging/launcher.py:673` 有原文注释）。
+
+打包版另有 `QQ-Notice-Hub.exe --quit`：让这份安装里正跑着的托盘退出，等价于右键托盘→「退出」，返回 0 表示确认已退出（`packaging/launcher.py:248`）。它不属于 `main.py` 的子命令。
+
+## 18. 配置项
+
+启动配置由 `noticehub/bootstrap/settings.py` 读取，说明见 [配置](../config.md)。下面列出配置类型和生效时机。
+
+「改完要不要重启」这一列：
+
+- **要重启**：只在启动时读一次、或决定监听/绑定/线程启动的项。
+- **保存即生效**：设置页保存会同时写 `.env` 并更新进程内 `Settings`，下一轮就用新值。
+- **下次启动生效**：写进 `.env` 但当前进程没有热更新路径的项。
+
+| 变量 | 类型 | 默认值 | 作用 | 改了要不要重启 |
+|---|---|---|---|---|
+| `NOTICEHUB_ENV` | 字符串 | `<运行目录>\.env` | `.env` 文件路径 | 要重启 |
+| `NOTICEHUB_DATA_DIR` | 字符串 | `<运行目录>\data` | 数据目录（库、附件、二维码） | 要重启 |
+| `NOTICEHUB_LOG_DIR` | 字符串 | `<运行目录>\logs` | 日志目录 | 要重启 |
+| `NOTICEHUB_GROUPS` | 列表 | 空 | **必填**：要监控的群号；空=不处理任何群（fail-closed） | 保存即生效 |
+| `NOTICEHUB_GROUP_ALIASES` | 映射 | 空 | 群号→中文名 | 保存即生效 |
+| `NOTICEHUB_QUIET_GROUPS` | 列表 | 空 | 低优先级群：不触发紧急立即推，不入摘要/待办 | 保存即生效 |
+| `NOTICEHUB_IMMEDIATE_GROUPS` | 列表 | 空 | 即时处理群：不等合并窗口 | 保存即生效 |
+| `NOTICEHUB_OFFICIAL_BOT_ENABLED` | bool | `1` | 官方 QQ 机器人开关（与 NapCat 链路二选一） | 要重启 |
+| `NOTICEHUB_PUSH_OPENIDS` | 列表 | 空 | 官方机器人私聊推送目标 openid | 保存即生效 |
+| `NOTICEHUB_WEBHOOKS` | 列表 | 空 | 通用 Webhook（POST JSON: title/content/source） | 保存即生效 |
+| `NOTICEHUB_ONEBOT_ENABLED` | bool | `0` | 启用 OneBot HTTP 上报接收 | 要重启 |
+| `NOTICEHUB_ONEBOT_HOST` | 字符串 | `127.0.0.1` | 接收端绑定地址 | 要重启 |
+| `NOTICEHUB_ONEBOT_PORT` | int | `8765` | 接收端端口 | 要重启 |
+| `NOTICEHUB_ONEBOT_TOKEN` | 字符串 | 空 | 接收端令牌；空时非环回来源的消息会被拒收 | 要重启 |
+| `NOTICEHUB_NAPCAT_API_URL` | 字符串 | `http://127.0.0.1:3001` | NapCat HTTP API 地址 | 保存即生效 |
+| `NOTICEHUB_NAPCAT_API_TOKEN` | 字符串 | 空（回退 `ONEBOT_TOKEN`） | NapCat API 令牌 | 保存即生效 |
+| `NOTICEHUB_NAPCAT_QR_PATH` | 字符串 | `<data>\qrcode.png` | 当前登录二维码文件路径 | 保存即生效 |
+| `NOTICEHUB_NAPCAT_DIR` | 字符串 | 空 | NapCat 安装目录（自动发现失败时手填） | 保存即生效 |
+| `NOTICEHUB_QQ_EXE` | 字符串 | 空 | QQ 可执行文件路径（自动发现失败时手填） | 保存即生效 |
+| `NOTICEHUB_HTTP_TIMEOUT` | int | `15` | 调 NapCat/学习通等外部接口超时（秒） | 保存即生效 |
+| `NOTICEHUB_QQ_GROUP_REFRESH_INTERVAL_SECONDS` | int | `300` | 群列表刷新间隔（秒） | 保存即生效 |
+| `NOTICEHUB_CATCHUP_ENABLED` | bool | `0` | 自动历史补采 | 保存即生效 |
+| `NOTICEHUB_CATCHUP_HOURS` | int | `24` | 补采回溯多少小时 | 保存即生效 |
+| `NOTICEHUB_CATCHUP_COUNT` | int | `50` | 每轮补采条数上限 | 保存即生效 |
+| `NOTICEHUB_CATCHUP_INTERVAL_MINUTES` | int | `30` | 补采间隔（分钟） | 保存即生效 |
+| `NOTICEHUB_DINGTALK_ENABLED` | bool | `0` | 启用钉钉接入 | 保存即生效 |
+| `NOTICEHUB_DINGTALK_GROUP_WHITELIST` | 列表 | 空 | 要监听的钉钉群 | 保存即生效 |
+| `NOTICEHUB_DINGTALK_SCAN_INTERVAL_SECONDS` | int | `30` | 钉钉扫描间隔（最小 5） | 保存即生效 |
+| `NOTICEHUB_WECHAT_ENABLED` | bool | `0` | 启用微信接入 | 保存即生效 |
+| `NOTICEHUB_WECHAT_GROUP_WHITELIST` | 列表 | 空 | 要读的微信群 | 保存即生效 |
+| `NOTICEHUB_WECHAT_GROUP_ALIASES` | 映射 | 空 | 微信群 id→中文名 | 保存即生效 |
+| `NOTICEHUB_WECHAT_SCAN_INTERVAL_SECONDS` | int | `300` | 微信扫描间隔（最小 30） | 保存即生效 |
+| `NOTICEHUB_WECHAT_KEY` | 字符串 | 空 | 手填的微信数据库 raw key（64 位十六进制） | 保存即生效 |
+| `NOTICEHUB_WECHAT_DIR` | 字符串 | 空 | 微信文件目录（改过存储位置时手填） | 保存即生效 |
+| `NOTICEHUB_CHAOXING_ENABLED` | bool | `0` | 启用学习通同步 | 保存即生效 |
+| `NOTICEHUB_CHAOXING_COOKIE` | 字符串 | 空（回退 `data/chaoxing.cookie`） | 学习通登录信息 | 保存即生效 |
+| `NOTICEHUB_CHAOXING_GROUP_WHITELIST` | 列表 | 空 | 学习通课程/群白名单 | 保存即生效 |
+| `NOTICEHUB_CHAOXING_SCAN_INTERVAL_SECONDS` | int | `1800` | 学习通同步间隔（最小 1800） | 保存即生效 |
+| `NOTICEHUB_CHAOXING_BASE` | 字符串 | 不设（用内置主机名） | 覆盖学习通接口基地址；设成 `off`/空串之外的值必须带 `http(s)://` 且非空，否则启动时报错 | 要重启 |
+| `NOTICEHUB_LLM` | bool | `1` | API 配置启用标记 | 保存即生效 |
+| `NOTICEHUB_LLM_API_KEY` | 字符串 | 空（兼容 `DASHSCOPE_API_KEY`） | OpenAI 兼容厂商的 key | 保存即生效 |
+| `NOTICEHUB_LLM_ENDPOINT` | 字符串 | `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | SuperDot 模型接口地址 | 保存即生效 |
+| `NOTICEHUB_LLM_MODEL` | 字符串 | `qwen-plus` | SuperDot 模型名 | 保存即生效 |
+| `NOTICEHUB_INCLUDE_RAW` | bool | `0` | 推送里是否附原文 | 保存即生效 |
+| `NOTICEHUB_ATTACHMENTS` | bool | `1` | 是否解析群文件/群图片 | 保存即生效 |
+| `NOTICEHUB_ATTACHMENT_MAX_MB` | int | `10` | 单个附件大小上限（MB） | 保存即生效 |
+| `NOTICEHUB_ATTACHMENT_MAX_PER_HOUR` | int | `30` | 每小时最多处理几个附件 | 保存即生效 |
+| `NOTICEHUB_ATTACHMENT_RETENTION_DAYS` | int | `7` | 附件保留天数 | 保存即生效 |
+| `NOTICEHUB_DOCUMENT_MAX_CHARS` | int | `30000` | 文档提取字符上限（最小 1000） | 保存即生效 |
+| `NOTICEHUB_DEDUPE_HOURS` | int | `6` | 同一条通知多少小时内不重复推，0=关闭 | 保存即生效 |
+| `NOTICEHUB_PUSH_HTML` | bool | `1` | 推送卡片用 HTML 排版 | 保存即生效 |
+| `NOTICEHUB_PUSH_DAILY_BUDGET` | int | `12` | 每日非紧急推送预算，0=不限 | 保存即生效 |
+| `NOTICEHUB_QUIET_HOURS` | 时段 | `23:00-07:00` | 夜间静默（紧急事项仍放行），留空=关闭 | 保存即生效 |
+| `NOTICEHUB_DEADLINE_REMINDERS` | bool | `1` | 截止提醒开关 | 保存即生效 |
+| `NOTICEHUB_DEADLINE_MORNING` | 时间 | `07:30` | 早上提醒时刻 | 保存即生效 |
+| `NOTICEHUB_DEADLINE_EVENING` | 时间 | `21:00` | 晚上提前看明天到期的时刻 | 保存即生效 |
+| `NOTICEHUB_CANDIDATE_PUSH` | bool | `1` | 候选确认卡开关 | 保存即生效 |
+| `NOTICEHUB_CANDIDATE_MIN_CONFIDENCE` | float | `0.55` | 候选最低置信度 | 保存即生效 |
+| `NOTICEHUB_CANDIDATE_REMINDER_HOURS` | int | `24` | 候选提醒间隔（最小 6） | 保存即生效 |
+| `NOTICEHUB_CANDIDATE_MAX_PER_TICK` | int | `2` | 每轮最多推几个候选 | 保存即生效 |
+| `NOTICEHUB_CANDIDATE_MAX_PER_DAY` | int | `4` | 每天最多推几个候选 | 保存即生效 |
+| `NOTICEHUB_WEEKLY_REVIEW` | bool | `1` | 每周复盘开关 | 保存即生效 |
+| `NOTICEHUB_WEEKLY_REVIEW_WEEKDAY` | int | `6` | 复盘日（0=周一，6=周日） | 保存即生效 |
+| `NOTICEHUB_WEEKLY_REVIEW_TIME` | 时间 | `20:30` | 复盘时刻 | 保存即生效 |
+| `NOTICEHUB_WINDOW_MINUTES` | int | `10` | 普通通知合并窗口（分钟） | 保存即生效 |
+| `NOTICEHUB_POLL_SECONDS` | int | `20` | 轮询间隔（秒，最小 5） | 保存即生效 |
+| `NOTICEHUB_URGENT_IMMEDIATE` | bool | `1` | 紧急通知立即推送 | 保存即生效 |
+| `NOTICEHUB_MIN_SCORE` | int | `3` | 分数阈值，越高越只推重要通知 | 保存即生效 |
+| `NOTICEHUB_MAX_ITEMS` | int | `30` | 单条摘要最多几件事 | 保存即生效 |
+| `NOTICEHUB_MAX_BATCH` | int | `400` | 单批最多处理多少条消息（最小 50） | 保存即生效 |
+| `NOTICEHUB_MAX_ATTEMPTS` | int | `4` | 投递失败重试次数 | 保存即生效 |
+| `NOTICEHUB_RETRY_SECONDS` | int | `90` | 投递重试间隔（秒，最小 10） | 保存即生效 |
+| `NOTICEHUB_RETENTION_DAYS` | int | `30` | 消息保留天数 | 保存即生效 |
+| `NOTICEHUB_WEB` | bool | `1` | 启用网页/待办台 | 要重启 |
+| `NOTICEHUB_WEB_HOST` | 字符串 | `0.0.0.0`（Windows）/ `127.0.0.1` | 网页绑定地址 | 要重启 |
+| `NOTICEHUB_WEB_PORT` | int | `8766` | 网页端口 | 要重启 |
+| `NOTICEHUB_WEB_TOKEN` | 字符串 | 空（非环回绑定时自动生成） | 网页访问令牌 | 要重启 |
+| `NOTICEHUB_EXECUTION_URL` | HTTP(S) 源地址 | 空 | 执行宿主地址，填写后启用包交接与正式工单接口 | 要重启 |
+| `NOTICEHUB_EXECUTION_TOKEN` | 字符串 | 空 | 执行宿主 Bearer 令牌，附件下载也用它校验宿主 | 要重启 |
+| `NOTICEHUB_EXECUTION_DATA_ROOT` | 绝对路径 | 空 | 执行宿主的项目目录，用于读取已发布成果 | 要重启 |
+| `NOTICEHUB_WEB_BASE_URL` | 字符串 | 空 | 固定外部访问地址（如 Tailscale Serve 的 HTTPS 地址） | 保存即生效 |
+| `NOTICEHUB_HOSTING_QUIT_QQ` | bool | `1` | 开始托管时先关电脑版 QQ | 保存即生效 |
+| `NOTICEHUB_HOSTING_RESTORE_QQ` | bool | `1` | 结束托管时把 QQ 开回来 | 保存即生效 |
+| `NOTICEHUB_QUIT_RESTORE_QQ` | bool | `0` | 退出程序时是否把 QQ 开回来 | 保存即生效 |
+| `NOTICEHUB_HOSTING_AUTO_ON_START` | bool | `0` | 程序一启动就自动开始托管 | 要重启 |
+| `NOTICEHUB_AUTOSTART` | bool | `0` | 开机自动启动（只写当前用户启动项） | 保存即生效 |
+| `NOTICEHUB_HOST_ACTIONS` | 字符串 | 空（=允许） | 设成 `off`/`0`/`false`/`no` 时禁用所有「会改本机网络/系统」的写操作（403）；另有 `NH_TEST_MODE` 同效 | 要重启 |
+| `NOTICEHUB_LAB_RULES` | bool | `1` | 自动整理规则总开关（关掉后规则三个接口回 403） | 保存即生效 |
+| `NOTICEHUB_UPDATE_CHANNEL` | 字符串 | 空（按 `APP_CHANNEL`） | 更新通道：`stable` / `beta`；其它值当未设置 | 保存即生效 |
+| `NOTICEHUB_UPDATE_MIRROR` | 字符串 | 空 | 更新镜像仓库，格式 `owner/repo`（另有旧名 `QQ_DIGEST_UPDATE_MIRROR`） | 保存即生效 |
+| `NOTICEHUB_SELF_QQ` | 字符串 | 空 | 自己的 QQ 号（判断是否 @ 到自己） | 保存即生效 |
+| `NOTICEHUB_SELF_NICKNAME` | 字符串 | 空 | 自己的昵称（同上） | 保存即生效 |
+
+### 18.1 不带 `NOTICEHUB_` 前缀的变量
+
+这些是第三方通道自己的名字，**故意不加前缀**（加了就没人认得了）：
+
+| 变量 | 作用 |
+|---|---|
+| `QQ_BOT_APPID` / `QQ_BOT_SECRET` / `QQ_BOT_SANDBOX` | 官方 QQ 机器人凭据 |
+| `WXPUSHER_APP_TOKEN` / `WXPUSHER_UIDS` / `WXPUSHER_TOPIC_IDS` | WxPusher 推送（逐个见 18.2） |
+| `SERVERCHAN_KEYS` | Server酱推送（见 18.2） |
+| `PUSHPLUS_TOKENS` | PushPlus 推送（见 18.2） |
+| `DASHSCOPE_API_KEY` | 旧版 LLM key（`NOTICEHUB_LLM_API_KEY` 为空时回退） |
+
+### 18.2 推送通道的六个键（设置页可改）
+
+设置页「提醒怎么送到手机」保存的就是这一组。代码里的常量叫 `_PUSH_SETTING_ENV_KEYS`（`noticehub/web/settings_api.py:61`），六项一一对应：
+
+| 环境变量 | 请求体字段 | 类型 | 默认值 | 含义 | 网页可改 |
+|---|---|---|---|---|---|
+| `WXPUSHER_APP_TOKEN` | `wxpusher_app_token` | 字符串（**只能一个**） | 空 | WxPusher 应用 token，微信接收 | ✅ 设置 →「提醒怎么送到手机」 |
+| `WXPUSHER_UIDS` | `wxpusher_uids` | 列表（逗号分隔） | 空 | WxPusher 关注者 UID，指定发给哪些人 | ✅ 同上 |
+| `WXPUSHER_TOPIC_IDS` | `wxpusher_topic_ids` | 整数列表 | 空 | WxPusher 主题 ID，**只能是正整数** | ✅ 同上 |
+| `SERVERCHAN_KEYS` | `serverchan_keys` | 列表 | 空 | Server酱 SendKey，微信接收 | ✅ 同上 |
+| `PUSHPLUS_TOKENS` | `pushplus_tokens` | 列表 | 空 | PushPlus token | ✅ 同上 |
+| `NOTICEHUB_WEBHOOKS` | `webhook_urls` | 列表 | 空 | 通用回调地址，POST JSON（`title` / `content` / `source`） | ✅ 同上 |
+
+规则（`settings_api.py:94`）：
+
+- 这六个一起构成「推送通道」这一组。请求体里带其中任意一个，就按这一组处理；和别的组混着提交会被拒（400「推送通道设置请单独保存」）。
+- **任何一项非法整体拒绝，不做部分写入**。校验规则：App Token 不能填多个（逗号/空格分隔会被当成两个）；Topic ID 只能是正整数；Webhook 必须以 `http://` 或 `https://` 开头。
+- 保存后写 `.env` 并热更新内存里的 `Settings`，不用重启。
+- 页面回显是脱敏的：只给「配了几个」和每项尾 4 位（`_mask_push_secret`），不回明文。
+- 五个第三方键不带 `NOTICEHUB_` 前缀，只有 `NOTICEHUB_WEBHOOKS` 带；第三方名改了就对不上它们的文档。
+
+### 18.3 旧名兼容（`QQ_DIGEST_*`）
+
+规则只有一条：**`NOTICEHUB_<X>` 优先，没有才回退 `QQ_DIGEST_<X>`**。两个都写时按新名走，哪怕新名是空串也算用户显式选择（`noticehub/bootstrap/settings.py:26`）。
+
+首次读到旧名会记一条 warning：`检测到旧环境变量名 QQ_DIGEST_*，已按兼容读取；建议改成 NOTICEHUB_*`（只警告一次）。
+
+所以 `QQ_DIGEST_WEB_PORT`、`QQ_DIGEST_GROUPS`、`QQ_DIGEST_WEB_TOKEN`… 这些旧名全部仍然可用，名字与上表一一对应（去掉前缀换成 `QQ_DIGEST_`）。**改配置时别两套都写**：`.env` 里同时留着 `QQ_DIGEST_X` 和 `NOTICEHUB_X` 时，用户改旧行不会生效。
+
+## 19. 自检命令
+
+下面的命令可列出实际路由数量与配置键数量。
+
+```powershell
+# 路由数量依次为 GET、POST、GET 前缀、POST 前缀
+.\.venv\Scripts\python.exe -X utf8 -c "import noticehub.web.routes as r; print(len(r.GET_ROUTES), len(r.POST_ROUTES), len(r.GET_PATTERN_ROUTES), len(r.POST_PATTERN_ROUTES))"
+
+# 统计 settings.py 读取的 NOTICEHUB_ 配置键
+.\.venv\Scripts\python.exe -X utf8 -c "import ast,io;t=ast.parse(io.open('noticehub/bootstrap/settings.py',encoding='utf-8').read());print(len({n.args[1].value for n in ast.walk(t) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='env_value' and len(n.args)>1 and isinstance(n.args[1],ast.Constant)}))"
+```
+
+还有配置键由使用处直接读取，例如下面这些键。
+
+```powershell
+Get-ChildItem noticehub -Recurse -Filter *.py | Select-String -Pattern 'NOTICEHUB_(NAPCAT_DIR|QQ_EXE|HOST_ACTIONS|UPDATE_MIRROR|CHAOXING_BASE)' -Encoding UTF8 |
+  ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique
+```
+
+列出推送键。
+
+```powershell
+# 打印推送通道的 6 个键（其中 5 个不带 NOTICEHUB_ 前缀）
+.\.venv\Scripts\python.exe -X utf8 -c "from noticehub.web.settings_api import _PUSH_SETTING_ENV_KEYS as k; [print(v) for v in k.values()]"
+```
+
+```
+WXPUSHER_APP_TOKEN
+WXPUSHER_UIDS
+WXPUSHER_TOPIC_IDS
+SERVERCHAN_KEYS
+PUSHPLUS_TOKENS
+NOTICEHUB_WEBHOOKS
+```
+
+
+### 前端提醒偏好
+
+`GET /api/settings/reminders` 读取本机 SQLite 保存的偏好，`POST /api/settings/reminders` 一次保存三个布尔字段 `action`、`result`、`problem`。返回 `{code:"OK",preferences:{...}}`。待处理通知继续使用 `GET /api/notifications?state=pending`。

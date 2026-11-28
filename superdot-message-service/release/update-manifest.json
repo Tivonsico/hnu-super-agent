@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "tag": "v1.1.0",
+      "version": "1.1.0",
+      "name": "群务台 1.1.0",
+      "notes": "钉钉群、微信群、学习通跟 QQ 群一起收进同一个待办台；待办台、月历、公告面板重做；设置页按用途分组，检查更新、下载、核对指纹都在里面点。设置页的说明文字统一到 13 像素起，不再靠 9 到 10 像素的小字补细节。修微信 4.1 以后读不到聊天记录（密钥改为按内容形状查找）、设置页来回切之后接入卡片消失与动效开关出现两份、概览翻页时内容跟着上下跳、暗色标记看不清、月历标题在窄屏大字号下折行。升级不用重新配置，data 与 .env 都会保留。",
+      "published_at": "2026-11-15T21:47:00+08:00",
+      "asset_name": "QQ-Notice-Hub.zip",
+      "size": 51334933,
+      "sha256": "8b73842504be6748d6a458c066b84cfc4da7d945363fce9bc48c3bed134cced8",
+      "download_url": "https://gitee.com/ExpertKT/notice-hub-mirror/releases/download/v1.1.0/QQ-Notice-Hub.zip"
+    },
+    {
+      "tag": "v1.1.0-beta.19",
+      "version": "1.1.0-beta.19",
+      "name": "群务台 1.1.0-beta.19（测试版）",
+      "notes": "设置页按用途收成四组（接入与通道 / 提醒与订阅 / 系统与维护 / 关于），点组标题开合，默认只摊开第一组；左栏导航、搜索框和常用磁贴会先把目标那组摊开再滚过去。「外观」多了字号三档：默认、偏大、很大，放大时版心宽度同步放宽（1440 / 1800 / 2160），图标、开关、间距跟着放大。NapCat 官方 11 月 12 日清空仓库，一键装 QQ 引擎改从社区留档取 4.18.42 并核对 sha256。概览副标题不再说「逾期事项已收起」。升级不用重新配置，data 与 .env 都会保留。",
+      "published_at": "2026-11-12T21:37:43+08:00",
+      "asset_name": "QQ-Notice-Hub.zip",
+      "size": 51317174,
+      "sha256": "200f7621ada33288fe977ebdd9aa2cb659e8c26a5eaa013211a30607984f5f90",
+      "download_url": "https://gitee.com/ExpertKT/notice-hub-mirror/releases/download/v1.1.0-beta.19/QQ-Notice-Hub.zip"
+    },
+    {
+      "tag": "v1.1.0-beta.18",
+      "version": "1.1.0-beta.18",
+      "name": "群务台 1.1.0-beta.18（测试版）",
+      "notes": "这一版修一处提示：设置页以前会把下载过、后来已经装上的更新包当成「更新包已就绪」，显示的还是那个旧版本号，点下去又把旧包装一遍。现在启动时按版本号比一次，不比当前版本新的待装记录直接清掉，比当前新的照常保留。另外最近推送的卡片标题改用正文第一句，手机宽度下的大标题不再剩一两个字单独占一行。功能和数据结构没变，升级不用重新配置。",
+      "published_at": "2026-11-05T21:20:24+08:00",
+      "asset_name": "QQ-Notice-Hub.zip",
+      "size": 51196481,
+      "sha256": "324ee80557803d2fd2e29d932240763f9929f247d5dc9b9a8a5c68632620e02f",
+      "download_url": "https://gitee.com/ExpertKT/notice-hub-mirror/releases/download/v1.1.0-beta.18/QQ-Notice-Hub.zip"
+    },
+    {
+      "tag": "v1.1.0-beta.17",
+      "version": "1.1.0-beta.17",
+      "name": "群务台 1.1.0-beta.17（测试版）",
+      "notes": "这一版修的是上一版界面改造留下的毛病：设置页会自己滑回顶部、微信和钉钉的群列表被挤成竖排、右上角的提示盖住正文、「刷新二维码」其实没换码、置顶日程的拖动把手偏在一边、最近推送和收件箱来回切的时候页面会左右抖。现在提示和公告收进一个铃铛图标，点开分「通知」「公告」两页，不再浮在正文上；最近推送的列宽有窄 / 标准 / 宽 / 通栏四档，选过一次就记住；收件箱加了类型筛选（全部 / 文字 / 图片 / 链接 / 文件），只有 [图片] 这类占位符、本身又不是通知的消息默认不显示；「刷新二维码」会真的重启引擎换一张新码（约十几秒），平时每 5 秒的轮询只取图、不会反复重启。顺手把同一个毛病的其它地方一起找了：最近推送和收件箱以前都是先清空再取数，网络慢时会闪一下空白并把人顶到页顶，现在都是拿到结果再替换；几处写了 class 却没有任何样式的地方也补齐或删掉了。另外修掉一个会让整页卡死的死锁：通知同时挂满三张、且三张都不自动消失时，挤卡逻辑找不到可挤的一张，判断「满了」的循环永远成立，页面主线程被转死；现在找不到可挤的就退而挤掉最旧那张，并给循环加了次数上限。功能、配置项、数据结构没变，升级不用重新配置。",
+      "published_at": "2026-11-05T14:14:08+08:00",
+      "asset_name": "QQ-Notice-Hub.zip",
+      "size": 51196049,
+      "sha256": "bc1d1f4937b509e6127487ee45173ebed797b987a4e235cc6eb85528c5a8c3f6",
+      "download_url": "https://gitee.com/ExpertKT/notice-hub-mirror/releases/download/v1.1.0-beta.17/QQ-Notice-Hub.zip"
+    },
+    {
+      "tag": "v1.1.0-beta.16",
+      "version": "1.1.0-beta.16",
+      "name": "群务台 1.1.0-beta.16（测试版）",
+      "notes": "同一版本号再重出一次（2026-11-03 晚）。这次加了两件：服务意外退出后有人管——计划任务每 5 分钟探一次 /api/health，没应答就隐藏拉起；从托盘点「退出」会留下主动退出的标记，写了就不再自动拉起，下次正常启动清掉。安装脚本把看门狗的触发器挂成「开机一次 + 之后每 5 分钟」，注册后回查确认。另外把一批「没验证就报成功」的地方改成看结果：附件复用要大小对得上才用，群建议两个入口统一看同一个开关，实验功能出错会带上异常类型并顺手修好一直 503 的 GET /api/lab/search，钉钉 scan_once() 返回真正入库的条数，数据库操作按 rowcount 报数，安装演练不再把失败当成功。上一轮修的「NapCat 拉不起来」与几处判活问题也都在包里。功能、配置项、数据结构与 beta.15 一致，升级不用重新配置。另外修了安装时两处只报成功的地方：计划任务用了系统不接受的时间上限，注册会直接失败，现在改成无限期重复并在注册后回读确认；看门狗以前每 5 分钟会闪一下黑框，现在经 wscript 无窗口启动。",
+      "published_at": "2026-11-04T01:13:01+08:00",
+      "asset_name": "QQ-Notice-Hub.zip",
+      "size": 52284271,
+      "sha256": "3deff72b5a699da4b52f1e55ddd2699ddf907ba6ef7d63639b6d7ec1ed9af31c",
+      "download_url": "https://gitee.com/ExpertKT/notice-hub-mirror/releases/download/v1.1.0-beta.16/QQ-Notice-Hub.zip"
+    },
+    {
+      "tag": "v1.1.0-beta.15",
+      "version": "1.1.0-beta.15",
+      "name": "群务台 1.1.0-beta.15（测试版）",
+      "notes": "收件箱能看到真图片：普通消息和历史回溯消息的图片也会留存原图，列表直接显示缩略图，点开看大图。自动整理规则的关键词改成一条条加的标签，回车或逗号生成、点 × 单独删。设置页自检从 76–84 秒降到几秒，点退出不再等 40 秒。日历订阅时间不再偏 8 小时；NapCat 安装有进度；手机端与网页端各修了一批交互问题。",
+      "published_at": "2026-10-31T08:07:21+08:00",
+      "asset_name": "QQ-Notice-Hub.zip",
+      "size": 51039911,
+      "sha256": "90d6b2b1612ea0eed13855f06a80c752b081dcb60376452f3de76d971a11703a",
+      "download_url": "https://gitee.com/ExpertKT/notice-hub-mirror/releases/download/v1.1.0-beta.15/QQ-Notice-Hub.zip"
+    }
+  ],
+  "signature": {
+    "alg": "RS256",
+    "key_id": "nh-2026-1",
+    "value": "HZvMIjZEUTL2a1KOO21yBxCSC8sW0_5Z5c-v_9vGmAa3byxq1Ck6w-tgE8C2qrQUsmmaoqTajgZQLIgp9zs0SgtSRQ6_hqq7ZdL9pBc7ZngOPOLkDDV-EeWLKvZv7EO3J-S0fXBul3IJvs-jZtlgl1zBx5YMbu86mNA7T8kSCNH6ZQIpVKEgPbQ6dJQZIqU_4vKN5t5I1pvUd6_h-iefA95WU-f-RqQxmi8zZcZajmJjOvoJDe7KTQHqlPy_G3A_2iB5QJn9O_4NvHAL999MGTelQQT_tPx1FCXyW-ven7ICTlPxfMOQiGEa1WCRR6_ygM-8mwmDfnIQkDx11DtQ14SjJEVSBnoQlNFd63aiQjuAx4hr4Khhqcr0g2EDWArvYdwuMxIxC0ubycHJxJRkGBp7XDBpqfDezHGBiRKADLWaGD9S4FRIlvT2bYX47Grhvj9Hor7Bhrt38G6WmqQYGCyp2zqaT95kIDexTf3bSm1fxX5duyIE8d2dfkhdt4r6"
+  }
+}

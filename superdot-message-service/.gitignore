@@ -1,0 +1,71 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/
+logs/
+video/
+*.log
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.jsonl
+
+# Local-only deployment notes
+NEXT-STEPS.md
+TRANSACTION-LOOP-HANDOFF.md
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+.reports/
+
+# 打包产物：体积大且可重新生成，不进仓库；发布时作为 Release 附件上传
+packaging/build/
+packaging/dist/
+packaging/*.zip
+*.lnk
+
+# 本地回滚点（我自己留的备份），不该进仓库
+.rollback/
+
+# 测试/运行期临时目录与临时库文件（TEMP 指向仓库根时会落在这里）
+notice-hub-watchdog-*/
+notice-hub-quitreq-*/
+notice-hub-quit-*/
+notice-hub-mutex-*/
+notice-hub-log-*/
+notice-hub-onedir-*/
+qq-live-digest-tests-*/
+noticehub-tests-*/
+nh-inline-js-*/
+nh-theme-audit-*/
+qq-digest-dt-*.db-wal
+qq-digest-dt-*.db-shm
+
+# TEMP 指向仓库根时，更新脚本和测试夹具也会落在这里
+notice-hub-update-*.ps1
+qq-notice-hub-test-*
+
+# 本地验证工具与临时产物
+_qa/
+.ui-verify/
+.tmp-qa/
+*.log
+nh-tmp/
+backups/
+
+# 过程资料里的截图与海报只留本地当证据，不进仓库
+docs/internal/**/*.png
+docs/internal/**/*.jpg

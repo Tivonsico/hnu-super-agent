@@ -1,0 +1,1880 @@
+"""更新器测试（task-150）。
+
+红线：**绝不真的连 GitHub**（urlopen 全部 mock），**绝不在测试里启动更新脚本**
+（脚本会 kill 掉本安装目录的进程），只在文本层面断言脚本正文。
+"""
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta
+import unittest
+import urllib.error
+from urllib.parse import parse_qs, urlsplit
+from pathlib import Path
+from unittest.mock import patch
+
+from noticehub.update import update_signing, updater, update_sources
+from noticehub.platform.version import APP_CHANNEL, APP_VERSION
+from tests.test_update_signing import TEST_D, TEST_E, TEST_KEY_ID, TEST_N, _b64, _sign_raw
+
+
+def _sign_manifest(document: dict) -> dict:
+    """把一份清单签上测试私钥（生产公钥表在测试里临时替换）。"""
+    signed = json.loads(json.dumps(document))
+    signed["signature"] = {
+        "alg": "RS256",
+        "key_id": TEST_KEY_ID,
+        "value": _b64(_sign_raw(update_signing.canonical_payload(document))),
+    }
+    return signed
+
+
+def _manifest_item_from_latest(latest: dict) -> dict:
+    return {
+        "tag": latest.get("tag") or "",
+        "version": latest.get("version") or "",
+        "name": latest.get("name") or "",
+        "notes": latest.get("notes") or "",
+        "published_at": latest.get("published_at") or "",
+        "asset_name": latest.get("asset_name") or "",
+        "size": int(latest.get("size") or 0),
+        "sha256": str(latest.get("sha256") or ""),
+        "download_url": str(latest.get("download_url") or ""),
+    }
+
+_SPEC = importlib.util.spec_from_file_location(
+    "packaging_launcher_updater", Path(__file__).parents[1] / "packaging" / "launcher.py"
+)
+launcher = importlib.util.module_from_spec(_SPEC)
+assert _SPEC.loader is not None
+_SPEC.loader.exec_module(launcher)
+
+
+class FakeResponse:
+    """够用的假 urlopen 响应：支持分块 read、context manager、Content-Length。"""
+
+    def __init__(self, body, *, status=200, headers=None):
+        self._body = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
+        self._pos = 0
+        self.status = status
+        self.headers = headers if headers is not None else {}
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            chunk = self._body[self._pos:]
+        else:
+            chunk = self._body[self._pos:self._pos + size]
+        self._pos += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def release_payload(tag="v1.1.0", *, name="群务台 1.1.0", digest="sha256:" + "a" * 64, size=1234):
+    asset = {
+        "name": updater.ASSET_NAME,
+        "size": size,
+        "browser_download_url": "https://example.invalid/QQ-Notice-Hub.zip",
+    }
+    if digest is not None:
+        asset["digest"] = digest
+    return {
+        "tag_name": tag,
+        "name": name,
+        "body": "修复了一堆问题\n\n- 新增：A 功能\n- 修复：B 问题",
+        "html_url": "https://github.com/ExpertKT/notice-hub/releases/tag/" + tag,
+        "published_at": "2026-10-11T01:00:00Z",
+        "draft": False,
+        "assets": [asset],
+    }
+
+
+class SigningKeyMixin:
+    """把测试公钥临时装进 KNOWN_KEYS（生产公钥不动，clear=False 保留）。"""
+
+    def setUp(self):
+        super().setUp()
+        keys = patch.dict(update_signing.KNOWN_KEYS, {TEST_KEY_ID: (TEST_N, TEST_E)})
+        keys.start()
+        self.addCleanup(keys.stop)
+
+    @staticmethod
+    def _signed(document: dict) -> dict:
+        return _sign_manifest(document)
+
+
+class SignedManifestCheckMixin(SigningKeyMixin):
+    """GitHub 展示路径的用例：安装权威来自签名清单。
+
+    按 release payload 现场签一份清单喂给 ``_fetch_manifest``：被测逻辑照常跑
+    （验签、取 size/sha256/download_url 都是真的），不用给每个用例手写签名清单。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._latest_captured: dict = {}
+        real_latest_from_release = updater._latest_from_release
+
+        def capture(release):
+            latest = real_latest_from_release(release)
+            self._latest_captured = latest
+            return latest
+
+        capture_patch = patch.object(updater, "_latest_from_release", side_effect=capture)
+        capture_patch.start()
+        self.addCleanup(capture_patch.stop)
+        manifest_patch = patch.object(updater, "_fetch_manifest", side_effect=self._signed_manifest)
+        manifest_patch.start()
+        self.addCleanup(manifest_patch.stop)
+
+    def _signed_manifest(self, source, timeout):
+        item = _manifest_item_from_latest(self._latest_captured)
+        return _sign_manifest({"version": 1, "items": [item]})
+
+
+class CheckUrlTests(SignedManifestCheckMixin, unittest.TestCase):
+    @staticmethod
+    def _github_only():
+        return [{
+            "id": "github",
+            "repo": updater.DEFAULT_REPO,
+            "api_root": update_sources.GITHUB_API,
+            "raw_base": update_sources.GITHUB_RAW % updater.DEFAULT_REPO,
+        }]
+
+    def test_stable_channel_uses_release_list(self):
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["timeout"] = timeout
+            seen["headers"] = dict(request.headers)
+            return FakeResponse([release_payload()])
+
+        with patch.object(updater.update_sources, "sources", return_value=self._github_only()):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="stable")
+
+        self.assertTrue(result["ok"])
+        self.assertIn("/releases?per_page=100", seen["url"])
+        self.assertEqual(result["channel"], "stable")
+        self.assertEqual(seen["timeout"], 8.0)
+        self.assertEqual(seen["headers"].get("User-agent"), updater.USER_AGENT)
+        self.assertEqual(result["latest"]["tag"], "v1.1.0")
+        self.assertEqual(result["latest"]["version"], "1.1.0")
+        self.assertEqual(result["latest"]["asset_name"], updater.ASSET_NAME)
+        self.assertEqual(result["latest"]["sha256"], "a" * 64)
+        self.assertEqual(result["latest"]["size"], 1234)
+        self.assertEqual(result["current"]["version"], APP_VERSION)
+        self.assertEqual(result["current"]["tag"], "v" + APP_VERSION)
+
+    def test_fetch_json_sends_no_cache_header(self):
+        """P2-8：清单请求必须带 no-cache，否则发版后几十分钟会拿到 CDN 旧清单。"""
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["headers"] = dict(request.headers)
+            return FakeResponse([release_payload()])
+
+        with patch.object(updater.update_sources, "sources", return_value=self._github_only()):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                updater.check(channel="stable")
+        self.assertEqual(seen["headers"].get("Cache-control"), "no-cache")
+
+    def test_stable_skips_newer_test_release_while_beta_keeps_it(self):
+        beta = release_payload(tag="v1.1.0-beta.1", name="beta")
+        beta["published_at"] = "2026-10-12T00:00:00Z"
+        stable = release_payload(tag="v1.0.0", name="stable")
+        stable["published_at"] = "2026-10-11T00:00:00Z"
+
+        with patch.object(updater, "_fetch_json", return_value=[beta, stable]):
+            stable_result = updater.check(channel="stable")
+            beta_result = updater.check(channel="beta")
+
+        self.assertTrue(stable_result["ok"])
+        self.assertEqual(stable_result["latest"]["tag"], "v1.0.0")
+        self.assertEqual(beta_result["latest"]["tag"], "v1.1.0-beta.1")
+
+    def test_stable_selects_newest_formal_release(self):
+        older = release_payload(tag="v1.0.0")
+        older["published_at"] = "2026-10-11T00:00:00Z"
+        newer = release_payload(tag="v2026.10.27")
+        newer["published_at"] = "2026-10-12T00:00:00Z"
+
+        with patch.object(updater, "_fetch_json", return_value=[older, newer]):
+            result = updater.check(channel="stable")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["tag"], "v2026.10.27")
+
+    def test_latest_carries_name_notes_and_html_url_verbatim(self):
+        payload = release_payload(tag="v1.1.0", name="群务台 1.1.0 · 更新说明")
+
+        with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse([payload])):
+            result = updater.check(channel="stable")
+
+        latest = result["latest"]
+        self.assertEqual(latest["name"], "群务台 1.1.0 · 更新说明")
+        # notes 必须是 body 原文，不许格式化/截断
+        self.assertEqual(latest["notes"], payload["body"])
+        self.assertEqual(
+            latest["html_url"],
+            "https://github.com/ExpertKT/notice-hub/releases/tag/v1.1.0",
+        )
+
+    def test_missing_html_url_degrades_to_empty_string(self):
+        payload = release_payload()
+        payload.pop("html_url")
+
+        with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse([payload])):
+            result = updater.check(channel="stable")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["html_url"], "")
+
+    def test_beta_channel_scans_list_and_skips_drafts(self):
+        draft = release_payload(tag="draftnot", name="draft")
+        draft["draft"] = True
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            return FakeResponse([draft, release_payload(tag="v9.9.9", name="beta 版")])
+
+        with patch.object(updater.update_sources, "sources", return_value=self._github_only()):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+
+        self.assertIn("/releases?per_page=100", seen["url"])
+        self.assertEqual(result["latest"]["tag"], "v9.9.9")
+        self.assertEqual(result["latest"]["name"], "beta 版")
+        self.assertTrue(result["has_update"])
+
+    def test_beta_channel_picks_the_newest_published_release(self):
+        """GitHub 的 /releases 按 created_at（草稿建立时间）排，不是发布顺序：
+        先建草稿、后来才发布的版本会排在后面，不能让它把真正最新的压住
+        （v1.0.0 就被更早发布的 v2026.10.27 压住过）。"""
+        listed_first = release_payload(tag="v2026.10.27", name="老日历版")
+        listed_first["published_at"] = "2026-10-09T13:37:34Z"
+        published_later = release_payload(tag="v1.0.0", name="新品牌版")
+        published_later["published_at"] = "2026-10-10T15:00:00Z"
+
+        def fake_urlopen(request, timeout=None):
+            return FakeResponse([listed_first, published_later])
+
+        with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+            result = updater.check(channel="beta")
+
+        self.assertEqual(result["latest"]["tag"], "v1.0.0")
+        self.assertEqual(result["latest"]["name"], "新品牌版")
+
+    @staticmethod
+    def _beta_catalog():
+        releases = []
+        for index in range(21):
+            release = release_payload(tag="v2026.10.%d" % (index + 1))
+            release["published_at"] = "2026-10-%02dT00:00:00Z" % (index + 1)
+            if index == 12:
+                release["tag_name"] = "v1.0.0"
+                release["published_at"] = "2026-10-22T00:00:00Z"
+            releases.append(release)
+        return releases
+
+    def test_beta_scans_beyond_first_ten_for_latest_published_release(self):
+        releases = self._beta_catalog()
+        with patch.object(updater, "_fetch_json", return_value=releases):
+            result = updater.check(channel="beta")
+
+        self.assertEqual(result["latest"]["tag"], "v1.0.0")
+
+    def test_beta_requests_at_least_100_and_receives_beyond_first_ten(self):
+        releases = self._beta_catalog()
+        seen = {}
+
+        def fake_fetch_json(url, timeout):
+            seen["url"] = url
+            page_size = int(parse_qs(urlsplit(url).query)["per_page"][0])
+            return releases if page_size >= 100 else releases[:10]
+
+        with patch.object(updater.update_sources, "sources", return_value=self._github_only()):
+            with patch.object(updater, "_fetch_json", fake_fetch_json):
+                result = updater.check(channel="beta")
+
+        page_size = int(parse_qs(urlsplit(seen["url"]).query)["per_page"][0])
+        self.assertGreaterEqual(page_size, 100)
+        self.assertEqual(result["latest"]["tag"], "v1.0.0")
+
+    def test_beta_uses_last_listed_release_when_its_publish_time_is_newest(self):
+        listed_first = release_payload(tag="v2026.10.27")
+        listed_first["published_at"] = "2026-10-09T13:37:34Z"
+        listed_last = release_payload(tag="v1.0.0")
+        listed_last["published_at"] = "2026-10-09T15:19:49Z"
+
+        with patch.object(updater, "_fetch_json", return_value=[listed_first, listed_last]):
+            result = updater.check(channel="beta")
+
+        self.assertEqual(result["latest"]["tag"], "v1.0.0")
+
+    def test_beta_treats_missing_or_malformed_publish_times_as_oldest(self):
+        published = release_payload(tag="v1.0.0")
+        published["published_at"] = "2026-10-09T15:19:49Z"
+        for missing_time in (None, "", "not-a-timestamp"):
+            with self.subTest(published_at=missing_time):
+                unparseable = release_payload(tag="v9.9.9")
+                unparseable["published_at"] = missing_time
+                with patch.object(
+                    updater, "_fetch_json", return_value=[published, unparseable]
+                ):
+                    result = updater.check(channel="beta")
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["latest"]["tag"], "v1.0.0")
+
+    def test_default_channel_comes_from_version_module(self):
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            return FakeResponse([release_payload()])
+
+        clean_env = {k: v for k, v in updater.os.environ.items() if k != "QQ_DIGEST_UPDATE_CHANNEL"}
+        with patch.dict("os.environ", clean_env, clear=True):
+            with patch.object(updater.update_sources, "sources", return_value=self._github_only()):
+                with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                    result = updater.check()
+
+        self.assertEqual(result["channel"], APP_CHANNEL)
+        self.assertIn("/releases?per_page=100", seen["url"])
+
+
+class ChannelResolutionTests(unittest.TestCase):
+    """契约：显式参数 > 环境变量 > version.APP_CHANNEL；大小写不敏感；非法值当 beta。"""
+
+    def test_explicit_argument_wins_over_environment(self):
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "stable"}):
+            self.assertEqual(updater.resolve_channel("beta"), "beta")
+
+    def test_environment_wins_over_app_channel(self):
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "stable"}):
+            self.assertEqual(updater.resolve_channel(), "stable")
+            self.assertEqual(updater.resolve_channel(None), "stable")
+
+    def test_environment_is_case_insensitive(self):
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "BeTa"}):
+            self.assertEqual(updater.resolve_channel(), "beta")
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "OFF"}):
+            self.assertEqual(updater.resolve_channel(), "off")
+
+    def test_illegal_values_fall_back_to_beta(self):
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "nightly"}):
+            self.assertEqual(updater.resolve_channel(), "beta")
+        self.assertEqual(updater.resolve_channel("nightly"), "beta")
+
+    def test_empty_environment_value_uses_app_channel(self):
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "   "}):
+            self.assertEqual(updater.resolve_channel(), updater._normalize_channel(APP_CHANNEL))
+
+    def test_off_check_returns_empty_result_without_network(self):
+        def boom(*args, **kwargs):
+            raise AssertionError("off 通道不许联网")
+
+        with patch.object(updater.urllib.request, "urlopen", boom):
+            result = updater.check(channel="off")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["has_update"])
+        self.assertEqual(result["error"], "")
+        self.assertEqual(result["channel"], "off")
+        self.assertEqual(result["latest"]["tag"], "")
+
+    def test_environment_off_is_honoured_by_check(self):
+        def boom(*args, **kwargs):
+            raise AssertionError("off 通道不许联网")
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_CHANNEL": "off"}):
+            with patch.object(updater.urllib.request, "urlopen", boom):
+                result = updater.check()
+        self.assertEqual(result["channel"], "off")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["has_update"])
+
+
+class CheckDegradationTests(SignedManifestCheckMixin, unittest.TestCase):
+    def test_returns_dict_on_http_403_without_raising(self):
+        error = urllib.error.HTTPError("https://api.github.com/x", 403, "Forbidden", {}, None)
+        with patch.object(updater.urllib.request, "urlopen", side_effect=error):
+            result = updater.check(channel="stable")
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["has_update"])
+        self.assertIn("403", result["error"])
+        self.assertEqual(result["latest"]["tag"], "")
+        self.assertTrue(result["checked_at"])
+
+    def test_returns_dict_on_http_404(self):
+        error = urllib.error.HTTPError("https://api.github.com/x", 404, "Not Found", {}, None)
+        with patch.object(updater.urllib.request, "urlopen", side_effect=error):
+            result = updater.check(channel="stable")
+        self.assertFalse(result["ok"])
+        self.assertIn("404", result["error"])
+
+    def test_returns_dict_on_timeout(self):
+        with patch.object(updater.urllib.request, "urlopen", side_effect=TimeoutError("timed out")):
+            result = updater.check(channel="stable")
+        self.assertFalse(result["ok"])
+        self.assertIn("超时", result["error"])
+
+    def test_returns_dict_on_connection_error(self):
+        error = urllib.error.URLError(OSError("目标计算机积极拒绝"))
+        with patch.object(updater.urllib.request, "urlopen", side_effect=error):
+            result = updater.check(channel="stable")
+        self.assertFalse(result["ok"])
+        self.assertIn("网络", result["error"])
+
+    def test_returns_dict_on_broken_json(self):
+        with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse(b"<html>nope")):
+            result = updater.check(channel="stable")
+        self.assertFalse(result["ok"])
+        self.assertIn("JSON", result["error"])
+
+    def test_returns_dict_on_unexpected_exception(self):
+        with patch.object(updater.urllib.request, "urlopen", side_effect=ValueError("boom")):
+            result = updater.check(channel="stable")
+        self.assertFalse(result["ok"])
+        self.assertIn("boom", result["error"])
+
+    def test_ok_true_but_error_explains_missing_asset(self):
+        # 线上版本必须比本机新，否则 updater 会先判「还没发布」根本不看附件。
+        payload = release_payload(tag="v" + APP_VERSION + ".1", name="群务台 " + APP_VERSION + ".1")
+        payload["assets"] = []
+        with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse([payload])):
+            result = updater.check(channel="stable")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["asset_name"], "")
+        self.assertEqual(result["latest"]["sha256"], "")
+        self.assertIn("附件", result["error"])
+
+    def test_ok_true_but_error_explains_missing_digest(self):
+        payload = release_payload(
+            tag="v" + APP_VERSION + ".1", name="群务台 " + APP_VERSION + ".1", digest=None
+        )
+        with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse([payload])):
+            result = updater.check(channel="stable")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["sha256"], "")
+        self.assertIn("sha256", result["error"])
+
+
+class MirrorCheckTests(SignedManifestCheckMixin, unittest.TestCase):
+    """镜像用例：github 侧的安装权威用现场签的清单，gitee 侧仍走用例自己的假 http。"""
+
+    def setUp(self):
+        self._real_fetch_manifest = updater._fetch_manifest
+        super().setUp()
+
+    def _signed_manifest(self, source, timeout):
+        if source.get("id") == "github":
+            return _sign_manifest({"version": 1, "items": [_manifest_item_from_latest(self._latest_captured)]})
+        return self._real_fetch_manifest(source, timeout)
+
+    @staticmethod
+    def _manifest(tag="v1.2.0", version="1.2.0", sha="b" * 64):
+        return {
+            "version": 1,
+            "items": [{
+                "tag": tag,
+                "version": version,
+                "name": "notice-hub " + version,
+                "notes": "mirror release",
+                "published_at": "2026-10-22T00:00:00Z",
+                "asset_name": updater.ASSET_NAME,
+                "size": 12,
+                "sha256": sha,
+                "download_url": "https://gitee.com/ExpertKT/notice-hub/releases/download/" + tag + "/" + updater.ASSET_NAME,
+            }],
+        }
+
+    def test_github_failure_falls_back_to_manifest(self):
+        seen = []
+        github_error = urllib.error.URLError("offline")
+
+        def fake_urlopen(request, timeout=None):
+            seen.append(request.full_url)
+            if "api.github.com" in request.full_url:
+                raise github_error
+            return FakeResponse(self._signed(self._manifest()))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "gitee")
+        self.assertTrue(result["has_update"])
+        self.assertEqual(result["latest"]["tag"], "v1.2.0")
+        self.assertEqual([item["id"] for item in result["sources_tried"]], ["github", "gitee"])
+        self.assertFalse(result["sources_tried"][0]["ok"])
+        self.assertTrue(result["sources_tried"][1]["ok"])
+        self.assertIn("update-manifest.json", seen[-1])
+
+    def test_both_sources_fail_and_error_names_both(self):
+        error = urllib.error.URLError("offline")
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", side_effect=error):
+                result = updater.check(channel="beta")
+        self.assertFalse(result["ok"])
+        self.assertIn("github", result["error"])
+        self.assertIn("gitee", result["error"])
+        self.assertEqual([item["id"] for item in result["sources_tried"]], ["github", "gitee"])
+
+    def test_gitee_manifest_404_falls_back_to_legacy_root_path(self):
+        """清单真实位置在 release/ 下；release/ 若 404，要回退到根目录再取一次。"""
+        seen = []
+
+        def fake_urlopen(request, timeout=None):
+            url = request.full_url
+            if "api.github.com" in url:
+                raise urllib.error.URLError("offline")
+            seen.append(url)
+            if url.endswith("/release/update-manifest.json"):
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return FakeResponse(self._signed(self._manifest()))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+
+        self.assertTrue(result["ok"], result["error"])
+        self.assertEqual(result["source"], "gitee")
+        self.assertEqual(result["latest"]["tag"], "v1.2.0")
+        self.assertEqual(len(seen), 2, "先试 release/，404 后再退根目录")
+        self.assertTrue(seen[0].endswith("/ExpertKT/notice-hub/raw/master/release/update-manifest.json"))
+        self.assertTrue(seen[1].endswith("/ExpertKT/notice-hub/raw/master/update-manifest.json"))
+
+    def test_gitee_manifest_404_on_both_paths_reports_plain_404(self):
+        """两个地址都 404 时，报「Gitee 返回 404」这种人话，不把原始异常抖给用户。"""
+        def fake_urlopen(request, timeout=None):
+            url = request.full_url
+            if "api.github.com" in url:
+                raise urllib.error.URLError("offline")
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("更新源均不可用", result["error"])
+        self.assertIn("Gitee 返回 404（仓库或版本不存在）", result["error"])
+        self.assertNotIn("Traceback", result["error"])
+        self.assertEqual([item["id"] for item in result["sources_tried"]], ["github", "gitee"])
+        self.assertFalse(result["sources_tried"][1]["ok"])
+
+    def test_invalid_manifest_falls_back_without_raising(self):
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                raise urllib.error.URLError("offline")
+            return FakeResponse({"version": 1, "items": [{"tag": "v1.2.0"}]})
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertFalse(result["ok"])
+        # 没签名的清单在结构校验之前就被拒，文案是给用户看的那句
+        self.assertIn("签名校验失败", result["error"])
+        self.assertIn("清单没有签名", result["error"])
+        self.assertFalse(result["sources_tried"][1]["ok"])
+
+    def test_manifest_json_and_types_are_rejected_without_raising(self):
+        for bad_body in (b"not json", {"version": 1, "items": "wrong type"}):
+            with self.subTest(body=bad_body):
+                def fake_urlopen(request, timeout=None):
+                    if "api.github.com" in request.full_url:
+                        raise urllib.error.URLError("offline")
+                    return FakeResponse(bad_body) if isinstance(bad_body, bytes) else FakeResponse(bad_body)
+
+                with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+                    with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                        result = updater.check(channel="beta")
+                self.assertFalse(result["ok"])
+                if isinstance(bad_body, bytes):
+                    self.assertIn("gitee", result["error"])
+                else:
+                    # 有 JSON 但没签名：同样按「清单没有签名」失败关闭
+                    self.assertIn("清单没有签名", result["error"])
+
+    def test_unsigned_manifest_is_rejected_with_user_message(self):
+        """线上清单还没签名时：点「检查更新」必须看到这句话，而不是笼统的检查失败。"""
+        unsigned = self._manifest()  # 结构合法、但故意不带 signature
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                raise urllib.error.URLError("offline")
+            return FakeResponse(unsigned)
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["has_update"])
+        self.assertEqual(
+            result["error"],
+            "更新清单签名校验失败（清单没有签名），已拒绝自动更新。请从官网手动下载安装包。",
+        )
+        self.assertNotIn("检查失败", result["error"])
+        self.assertFalse(result["sources_tried"][1]["ok"])
+
+    def test_stable_manifest_excludes_prerelease_tags(self):
+        manifest = self._manifest(tag="v1.3.0-beta.1", version="1.3.0-beta.1")
+        manifest["items"].append(self._manifest(tag="v1.2.0", version="1.2.0")["items"][0])
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                raise urllib.error.URLError("offline")
+            return FakeResponse(self._signed(manifest))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="stable")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["tag"], "v1.2.0")
+
+    def test_same_tag_gitee_asset_is_added_as_download_fallback(self):
+        github = release_payload(tag="v1.2.0", digest="sha256:" + "a" * 64)
+        github["assets"][0]["browser_download_url"] = "https://github.com/asset.zip"
+        mirror = self._manifest(tag="v1.2.0", version="1.2.0", sha="a" * 64)
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                return FakeResponse([github])
+            return FakeResponse(self._signed(mirror))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertEqual(result["source"], "github")
+        self.assertEqual(result["latest"]["sha256"], "a" * 64)
+        # When both sources have matching sha256, Gitee becomes primary and GitHub is fallback
+        self.assertEqual(result["latest"]["download_url"], mirror["items"][0]["download_url"])
+        self.assertEqual(result["latest"]["fallbacks"], ["https://github.com/asset.zip"])
+
+    def test_matching_sha_prefers_gitee_download(self):
+        """When both sources report the same tag and sha256, use Gitee as primary download."""
+        github = release_payload(tag="v1.3.0", digest="sha256:" + "c" * 64)
+        github["assets"][0]["browser_download_url"] = "https://github.com/gh.zip"
+        mirror = self._manifest(tag="v1.3.0", version="1.3.0", sha="c" * 64)
+        mirror["items"][0]["download_url"] = "https://gitee.com/gt.zip"
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                return FakeResponse([github])
+            return FakeResponse(self._signed(mirror))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["download_url"], "https://gitee.com/gt.zip")
+        self.assertEqual(result["latest"]["fallbacks"], ["https://github.com/gh.zip"])
+
+    def test_mismatched_sha_keeps_github_primary(self):
+        """When sha256 differs, GitHub stays primary and no fallback is added (safety: avoid wrong package)."""
+        github = release_payload(tag="v1.3.0", digest="sha256:" + "d" * 64)
+        github["assets"][0]["browser_download_url"] = "https://github.com/gh2.zip"
+        mirror = self._manifest(tag="v1.3.0", version="1.3.0", sha="e" * 64)
+        mirror["items"][0]["download_url"] = "https://gitee.com/gt2.zip"
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                return FakeResponse([github])
+            return FakeResponse(self._signed(mirror))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["download_url"], "https://github.com/gh2.zip")
+        self.assertEqual(result["latest"]["fallbacks"], [])
+
+    def test_mismatched_sha_reports_warning(self):
+        """P2-9：两个清单 sha256 打架不能静默取 GitHub，返回 warning 且写一条日志。"""
+        github = release_payload(tag="v1.3.0", digest="sha256:" + "d" * 64)
+        github["assets"][0]["browser_download_url"] = "https://github.com/gh2.zip"
+        mirror = self._manifest(tag="v1.3.0", version="1.3.0", sha="e" * 64)
+        mirror["items"][0]["download_url"] = "https://gitee.com/gt2.zip"
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                return FakeResponse([github])
+            return FakeResponse(self._signed(mirror))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                with patch.object(updater.LOGGER, "warning") as warn:
+                    result = updater.check(channel="beta")
+        self.assertTrue(result["ok"])
+        self.assertIn("v1.3.0", result["warning"])
+        self.assertIn("sha256 不一致", result["warning"])
+        self.assertIn("已按 GitHub 清单继续", result["warning"])
+        self.assertTrue(warn.called)
+        self.assertIn("v1.3.0", " ".join(str(call) for call in warn.call_args_list))
+        # sha_match 语义不动：不一致时仍以 GitHub 为主源、不带 fallback。
+        self.assertEqual(result["latest"]["download_url"], "https://github.com/gh2.zip")
+        self.assertEqual(result["latest"]["fallbacks"], [])
+
+    def test_missing_sha_allows_fallback(self):
+        """When sha256 is missing from either side, the other source is still added as fallback."""
+        github = release_payload(tag="v1.4.0", digest="")  # No sha256
+        github["assets"][0]["browser_download_url"] = "https://github.com/gh3.zip"
+        mirror = self._manifest(tag="v1.4.0", version="1.4.0", sha="f" * 64)
+        mirror["items"][0]["download_url"] = "https://gitee.com/gt3.zip"
+
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                return FakeResponse([github])
+            return FakeResponse(self._signed(mirror))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["latest"]["download_url"], "https://github.com/gh3.zip")
+        self.assertEqual(result["latest"]["fallbacks"], ["https://gitee.com/gt3.zip"])
+
+    def test_only_gitee_has_version(self):
+        """When only Gitee has the version, use it as primary."""
+        def fake_urlopen(request, timeout=None):
+            if "api.github.com" in request.full_url:
+                raise urllib.error.URLError("offline")
+            return FakeResponse(self._signed(self._manifest(tag="v1.4.0", version="1.4.0", sha="f" * 64)))
+
+        with patch.dict("os.environ", {"QQ_DIGEST_UPDATE_MIRROR": "ExpertKT/notice-hub"}, clear=True):
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = updater.check(channel="beta")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "gitee")
+        self.assertEqual(result["latest"]["tag"], "v1.4.0")
+        self.assertEqual(result["latest"]["fallbacks"], [])
+
+
+class HasUpdateTests(SignedManifestCheckMixin, unittest.TestCase):
+    def _check(self, tag):
+        payload = release_payload(tag=tag)
+        with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse([payload])):
+            return updater.check(channel="beta")
+
+    def test_different_formal_tag_means_update(self):
+        self.assertTrue(self._check("v" + APP_VERSION + ".1")["has_update"])
+
+    def test_remote_older_beta_does_not_update(self):
+        with patch.object(updater, "current_version", return_value="1.1.0-beta.8"):
+            self.assertFalse(self._check("v1.1.0-beta.6")["has_update"])
+
+    def test_remote_newer_beta_updates(self):
+        with patch.object(updater, "current_version", return_value="1.1.0-beta.6"):
+            self.assertTrue(self._check("v1.1.0-beta.8")["has_update"])
+
+    def test_unparseable_tag_does_not_update(self):
+        result = self._check("release-latest")
+        self.assertFalse(result["has_update"])
+
+    def test_same_tag_means_no_update(self):
+        self.assertFalse(self._check("v" + APP_VERSION)["has_update"])
+
+    def test_tag_without_leading_v_is_normalised(self):
+        self.assertEqual(self._check(APP_VERSION)["latest"]["version"], APP_VERSION)
+
+    def test_missing_current_version_does_not_update(self):
+        payload = release_payload(tag="v1.1.0")
+        with patch.object(updater, "current_version", return_value=""):
+            with patch.object(
+                updater.urllib.request,
+                "urlopen",
+                lambda request, timeout=None: FakeResponse([payload]),
+            ):
+                result = updater.check(channel="stable")
+        self.assertFalse(result["has_update"])
+
+    def test_current_version_helper(self):
+        self.assertEqual(updater.current_version(), APP_VERSION)
+
+
+class DownloadTests(unittest.TestCase):
+    def _info(self, digest, tag="v1.1.0"):
+        return {
+            "tag": tag,
+            "sha256": digest,
+            "download_url": "https://github.com/qq-notice-hub/QQ-Notice-Hub.zip",
+        }
+
+    def _download(self, info, dest, **kwargs):
+        # 生产要求「清单 sha == 代码内 pin」，测试里按 info 自带的值临时登记。
+        with patch.dict(updater.PINNED_SHA256, {info.get("tag"): info.get("sha256")}, clear=True):
+            return updater.download(info, dest, **kwargs)
+
+    def test_download_writes_named_file_and_verifies_sha256(self):
+        import hashlib
+
+        body = b"hello notice hub"
+        digest = hashlib.sha256(body).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            response = FakeResponse(body, headers={"Content-Length": str(len(body))})
+            with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: response):
+                result = self._download(self._info(digest), Path(tmp))
+            self.assertTrue(result["ok"], result["error"])
+            self.assertEqual(result["bytes"], len(body))
+            self.assertEqual(result["sha256"], digest)
+            path = Path(result["path"])
+            self.assertEqual(path.name, "QQ-Notice-Hub-v1.1.0.zip")
+            self.assertEqual(path.read_bytes(), body)
+
+    def test_download_deletes_file_when_sha256_mismatches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            response = FakeResponse(b"tampered", headers={"Content-Length": "8"})
+            with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: response):
+                result = self._download(self._info("b" * 64), Path(tmp))
+            self.assertFalse(result["ok"])
+            self.assertIn("sha256", result["error"])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_download_without_url_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._download({"tag": "v1"}, Path(tmp))
+            self.assertFalse(result["ok"])
+            self.assertIn("下载地址", result["error"])
+
+    def test_download_survives_on_progress_callback_that_raises(self):
+        import hashlib
+
+        body = b"x" * (300 * 1024)
+        digest = hashlib.sha256(body).hexdigest()
+        calls = []
+
+        def broken_progress(done, total):
+            calls.append(done)
+            raise RuntimeError("UI 崩了")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            response = FakeResponse(body, headers={"Content-Length": str(len(body))})
+            with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: response):
+                result = self._download(self._info(digest), Path(tmp), on_progress=broken_progress)
+            self.assertTrue(result["ok"], result["error"])
+            self.assertTrue(calls)
+
+    def test_download_reports_network_error_and_removes_partial_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(updater.urllib.request, "urlopen", side_effect=TimeoutError("slow")):
+                result = self._download(self._info("c" * 64), Path(tmp))
+            self.assertFalse(result["ok"])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_download_filename_cannot_escape_dest_dir(self):
+        import hashlib
+
+        body = b"zip"
+        digest = hashlib.sha256(body).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "updates"
+            response = FakeResponse(body, headers={"Content-Length": "3"})
+            with patch.object(updater.urllib.request, "urlopen", lambda request, timeout=None: response):
+                result = self._download(self._info(digest, tag="../../evil"), dest)
+            self.assertTrue(result["ok"], result["error"])
+            self.assertEqual(Path(result["path"]).parent, dest)
+            name = Path(result["path"]).name
+            self.assertNotIn("/", name)
+            self.assertNotIn("\\", name)
+
+    def test_download_uses_mirror_after_primary_network_failure_and_verifies_hash(self):
+        import hashlib
+
+        body = b"mirror archive"
+        digest = hashlib.sha256(body).hexdigest()
+        seen = []
+
+        def fake_urlopen(request, timeout=None):
+            seen.append(request.full_url)
+            if request.full_url.endswith("primary.zip"):
+                raise urllib.error.URLError("offline")
+            return FakeResponse(body, headers={"Content-Length": str(len(body))})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            info = self._info(digest)
+            info["download_url"] = "https://github.com/primary.zip"
+            info["fallbacks"] = ["https://gitee.com/mirror.zip"]
+            with patch.object(updater.urllib.request, "urlopen", fake_urlopen):
+                result = self._download(info, Path(tmp))
+            self.assertTrue(result["ok"], result["error"])
+            self.assertEqual(result["sha256"], digest)
+            self.assertEqual(Path(result["path"]).read_bytes(), body)
+        self.assertEqual(seen, ["https://github.com/primary.zip", "https://gitee.com/mirror.zip"])
+
+    def test_download_uses_mirror_after_content_length_mismatch(self):
+        import hashlib
+
+        body = b"complete zip"
+        digest = hashlib.sha256(body).hexdigest()
+        responses = [
+            FakeResponse(b"short", headers={"Content-Length": "20"}),
+            FakeResponse(body, headers={"Content-Length": str(len(body))}),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            info = self._info(digest)
+            info["fallbacks"] = ["https://gitee.com/mirror.zip"]
+            with patch.object(updater.urllib.request, "urlopen", side_effect=responses):
+                result = self._download(info, Path(tmp))
+            self.assertTrue(result["ok"], result["error"])
+            self.assertEqual(Path(result["path"]).read_bytes(), body)
+
+    def test_download_clears_partial_file_when_all_urls_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            info = self._info("a" * 64)
+            info["fallbacks"] = ["https://gitee.com/mirror.zip"]
+            first = FakeResponse(b"short", headers={"Content-Length": "30"})
+            with patch.object(updater.urllib.request, "urlopen", side_effect=[first, urllib.error.URLError("offline")]):
+                result = self._download(info, Path(tmp))
+            self.assertFalse(result["ok"])
+            self.assertIn("主下载源", result["error"])
+            self.assertIn("备用源", result["error"])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_download_rejects_untrusted_host_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            info = self._info("a" * 64)
+            info["download_url"] = "https://evil.example/QQ-Notice-Hub.zip"
+            with patch.dict(updater.PINNED_SHA256, {"v1.1.0": "a" * 64}, clear=True), patch.object(updater.urllib.request, "urlopen") as fetch:
+                result = updater.download(info, Path(tmp))
+            self.assertFalse(result["ok"])
+            self.assertIn("下载源不可信", result["error"])
+            fetch.assert_not_called()
+
+    def test_download_allows_tag_without_pinned_hash_but_warns(self):
+        """旧版本不可能预知新版本的真实哈希：空表只记 warning，不能把升级卡死。"""
+        body = b"zip"
+        digest = __import__("hashlib").sha256(body).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            response = FakeResponse(body, headers={"Content-Length": str(len(body))})
+            with patch.dict(updater.PINNED_SHA256, {}, clear=True), patch.object(
+                updater.urllib.request, "urlopen", return_value=response
+            ), self.assertLogs(updater.LOGGER, level="WARNING") as logs:
+                result = updater.download(self._info(digest), Path(tmp))
+            self.assertTrue(result["ok"], result["error"])
+            self.assertTrue(any("没有代码内登记哈希" in line for line in logs.output), logs.output)
+
+    def test_download_refuses_when_manifest_hash_differs_from_pinned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(updater.PINNED_SHA256, {"v1.1.0": "f" * 64}, clear=True), patch.object(updater.urllib.request, "urlopen") as fetch:
+                result = updater.download(self._info("a" * 64), Path(tmp))
+            self.assertFalse(result["ok"])
+            self.assertIn("不一致", result["error"])
+            fetch.assert_not_called()
+
+    def test_trusted_host_matcher_allows_official_domains_only(self):
+        self.assertTrue(updater._trusted_download_url("https://github.com/a.zip"))
+        self.assertTrue(updater._trusted_download_url("https://objects.githubusercontent.com/a.zip"))
+        self.assertTrue(updater._trusted_download_url("https://raw.githubusercontent.com/a.zip"))
+        self.assertTrue(updater._trusted_download_url("https://gitee.com/a.zip"))
+        self.assertFalse(updater._trusted_download_url("https://gitee.com.evil.example/a.zip"))
+        self.assertFalse(updater._trusted_download_url("https://example.invalid/a.zip"))
+        self.assertFalse(updater._trusted_download_url("not a url"))
+
+
+class PendingUpdateTests(unittest.TestCase):
+    def test_pending_record_round_trips_and_can_be_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "update.zip"
+            archive.write_bytes(b"zip")
+            result = updater.mark_pending(root / "data", zip_path=archive, version="2.0.0")
+            self.assertEqual(result, {"ok": True, "error": ""})
+            record = updater.pending_update(root / "data")
+            self.assertEqual(record["zip"], str(archive.resolve()))
+            self.assertEqual(record["version"], "2.0.0")
+            self.assertTrue(record["at"])
+            updater.clear_pending(root / "data")
+            self.assertIsNone(updater.pending_update(root / "data"))
+
+    def test_missing_or_malformed_pending_record_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)
+            self.assertIsNone(updater.pending_update(data))
+            updates = data / "updates"
+            updates.mkdir()
+            (updates / updater.PENDING_UPDATE).write_text("not json", encoding="utf-8")
+            self.assertIsNone(updater.pending_update(data))
+
+    def test_pending_older_than_the_running_version_reads_as_absent(self):
+        """手动覆装/回退之后残留的旧记录不许再当成「待安装」：页面和托盘都会骗人。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "update.zip"
+            archive.write_bytes(b"zip")
+            self.assertTrue(updater.mark_pending(root / "data", zip_path=archive, version="1.1.0-beta.16")["ok"])
+            with patch.object(updater, "current_version", return_value="1.1.0-beta.17"):
+                self.assertIsNone(updater.pending_update(root / "data"))
+                self.assertEqual(updater.clear_stale_pending(root / "data"), "1.1.0-beta.16")
+            self.assertFalse((root / "data" / "updates" / updater.PENDING_UPDATE).exists())
+
+    def test_pending_newer_than_the_running_version_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "update.zip"
+            archive.write_bytes(b"zip")
+            self.assertTrue(updater.mark_pending(root / "data", zip_path=archive, version="1.1.0-beta.18")["ok"])
+            with patch.object(updater, "current_version", return_value="1.1.0-beta.17"):
+                self.assertIsNotNone(updater.pending_update(root / "data"))
+                self.assertEqual(updater.clear_stale_pending(root / "data"), "")
+            self.assertTrue((root / "data" / "updates" / updater.PENDING_UPDATE).exists())
+
+    def test_concurrent_mark_pending_writes_leave_one_readable_record(self):
+        """并发写 pending.json 不能互踩同一个临时文件，也不能留下 .tmp 残渣。"""
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "update.zip"
+            archive.write_bytes(b"zip")
+            results = []
+            failures = []
+
+            def worker(index: int) -> None:
+                try:
+                    results.append(updater.mark_pending(root / "data", zip_path=archive, version=f"2.0.{index}"))
+                except Exception as error:  # noqa: BLE001 - 测试要看到任何失败
+                    failures.append(error)
+
+            threads = [threading.Thread(target=worker, args=(index,)) for index in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+            self.assertEqual(failures, [])
+            self.assertEqual([item["ok"] for item in results], [True] * 8)
+            record = updater.pending_update(root / "data")
+            self.assertIsNotNone(record)
+            self.assertIn(record["version"], {f"2.0.{index}" for index in range(8)})
+            self.assertEqual(list((root / "data" / "updates").glob("*.tmp")), [])
+
+
+class ApplyAsyncTests(unittest.TestCase):
+    def _make_zip(self, tmp):
+        archive = Path(tmp) / "QQ-Notice-Hub-v1.1.0.zip"
+        archive.write_bytes(b"PK\x03\x04 pretend zip")
+        return archive
+
+    def _sha(self, archive):
+        import hashlib
+
+        return hashlib.sha256(Path(archive).read_bytes()).hexdigest()
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell apply script is Windows-only")
+    def test_script_contains_required_behaviour_and_flag_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen") as popen:
+                result = updater.apply_async(root, archive, 4321, data_dir=data, expected_sha256=self._sha(archive))
+            self.assertTrue(result["ok"], result["error"])
+            script_path = Path(result["script"])
+            try:
+                text = script_path.read_text(encoding="utf-8-sig")
+                # 1) 先请求托盘优雅退出，再等目标进程；超时才按安装目录兜底。
+                self.assertIn("Start-Process -FilePath $launcher -ArgumentList '--quit'", text)
+                self.assertLess(text.index("--quit"), text.index("AddSeconds(60)"))
+                self.assertIn("Get-Process -Id $pidToWait", text)
+                self.assertIn("AddSeconds(60)", text)
+                self.assertIn("优雅退出等待超时", text)
+                self.assertIn("Start-Sleep -Milliseconds 500", text)
+                # 2) 结束进程必须叠加「属于本安装」的范围：目录前缀，或镜像名 + 数据目录/命令行
+                self.assertIn("Get-CimInstance Win32_Process", text)
+                self.assertIn("StartsWith($prefix", text)
+                self.assertIn("OrdinalIgnoreCase", text)
+                self.assertIn("$root.TrimEnd('\\') + '\\'", text)
+                self.assertIn("Stop-Process", text)
+                self.assertIn("$dataPrefix = $data.TrimEnd('\\') + '\\'", text)
+                self.assertIn("$names = @('qq.exe', 'napcatwinbootmain.exe', 'napcat.exe')", text)
+                # 镜像名只在路径或命令行命中本安装数据目录时才杀，避免误杀同机其它实例
+                self.assertIn("$_.ExecutablePath.StartsWith($dataPrefix", text)
+                self.assertIn("$_.CommandLine.IndexOf($dataPrefix", text)
+                # 不许整机按镜像名杀进程（taskkill /IM 或 Get-Process -Name）
+                self.assertNotIn("/im ", text.lower())
+                self.assertNotIn("get-process -name", text.lower())
+                # 3) 失败也要把启动器拉起来
+                self.assertIn("Expand-Archive -LiteralPath $zip -DestinationPath $root -Force", text)
+                # 解压前复算包哈希（TOCTOU），且必须排在 Expand-Archive 之前
+                self.assertIn("$expectedHash = " + updater._ps_quote(self._sha(archive)), text)
+                self.assertIn("Get-FileHash -LiteralPath $zip -Algorithm SHA256", text)
+                self.assertIn("更新包哈希不符", text)
+                self.assertLess(
+                    text.index("Get-FileHash -LiteralPath $zip"),
+                    text.index("Expand-Archive -LiteralPath $zip"),
+                )
+                self.assertIn("Start-Process -FilePath $launcher", text)
+                self.assertIn("$launcher = " + updater._ps_quote(root / updater.LAUNCHER_EXE), text)
+                # 4) 全程写日志，最后一行是「完成」
+                self.assertIn("update.log", text)
+                self.assertIn("Write-UpdateLog", text)
+                self.assertIn("Write-UpdateLog '完成'", text)
+                # 只读属性清理（历史坑 C-03）与无条件 flag 清理
+                self.assertIn("FileAttributes]::ReadOnly", text)
+                self.assertIn("try { Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue } catch { }", text)
+                self.assertNotIn("if ($started) {\n    try { Remove-Item", text)
+                # 5) 拉起后做健康检查：最多 3 次、间隔 2 秒，失败给出人工兜底动作，且不许死循环
+                self.assertIn("$healthy = $false", text)
+                self.assertIn("for ($i = 1; $i -le 3; $i++)", text)
+                self.assertIn("/health", text)
+                self.assertIn("Start-Sleep -Seconds 2", text)
+                self.assertIn("请手动双击 QQ-Notice-Hub.exe 启动", text)
+                self.assertLess(text.index("Start-Process -FilePath $launcher -ArgumentList '--no-browser' -WorkingDirectory $root"), text.index("/health"))
+                # 自动更新后的重启不该抢屏幕：必须带 --no-browser，别再多开一个标签。
+                self.assertIn("Start-Process -FilePath $launcher -ArgumentList '--no-browser' -WorkingDirectory $root", text)
+                # 装完即清待装记录，否则托盘永远显示「重启并更新」，点一次再装一遍。
+                self.assertIn(
+                    "Remove-Item -LiteralPath (Join-Path (Split-Path -Parent $zip) 'pending.json')",
+                    text,
+                )
+                # 只在真的覆盖成功后才清：失败要留着记录让用户重试。
+                self.assertIn(
+                    "if ($expanded) {\n    try { Remove-Item -LiteralPath (Join-Path (Split-Path -Parent $zip) 'pending.json')",
+                    text,
+                )
+                # 探活不能走系统代理（HTTPS_PROXY 会拦 127.0.0.1）
+                self.assertIn("$req.Proxy = $null", text)
+            finally:
+                script_path.unlink(missing_ok=True)
+            flag = data / "updates" / "applying.flag"
+            self.assertTrue(flag.is_file())
+            popen.assert_called_once()
+            argv = popen.call_args[0][0]
+            self.assertEqual(argv[0], "powershell.exe")
+            self.assertIn("-File", argv)
+            self.assertEqual(argv[-1], str(script_path))
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell apply script is Windows-only")
+    def test_script_health_check_uses_configured_web_port(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen"):
+                result = updater.apply_async(root, archive, 1, data_dir=data, web_port=9877, expected_sha256=self._sha(archive))
+            self.assertTrue(result["ok"], result["error"])
+            script_path = Path(result["script"])
+            try:
+                text = script_path.read_text(encoding="utf-8-sig")
+                self.assertIn("$webPort = '9877'", text)
+                self.assertIn("'http://127.0.0.1:{0}/health' -f $webPort", text)
+            finally:
+                script_path.unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell apply script is Windows-only")
+    def test_script_tells_readonly_install_dir_users_to_retry_as_admin(self):
+        """装在 Program Files 时解压会因权限失败，文案必须点出「用管理员再来一次」。
+
+        以前只说「请重装或手动覆盖安装」，用户照着做还是失败——他不知道缺的是管理员权限。
+        这里不做可写性探测（那会多一条失败路径），只要求两处文案都带上这句提示。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen"):
+                result = updater.apply_async(root, archive, 4321, data_dir=data, expected_sha256=self._sha(archive))
+            self.assertTrue(result["ok"], result["error"])
+            script_path = Path(result["script"])
+            try:
+                text = script_path.read_text(encoding="utf-8-sig")
+                self.assertIn("解压失败（继续拉起旧版）", text)
+                self.assertIn("若是装在 Program Files，可能需要用管理员权限再点一次更新", text)
+                self.assertIn(
+                    "请重装或手动覆盖安装（若是装在 Program Files，可能需要用管理员权限再点一次更新）", text
+                )
+            finally:
+                script_path.unlink(missing_ok=True)
+                (data / "updates" / "applying.flag").unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell apply script is Windows-only")
+    def test_script_probes_locked_files_before_overwriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen"):
+                result = updater.apply_async(root, archive, 4321, data_dir=data, expected_sha256=self._sha(archive))
+            self.assertTrue(result["ok"], result["error"])
+            script_path = Path(result["script"])
+            try:
+                text = script_path.read_text(encoding="utf-8-sig")
+                # 解压前先独占打开每个将被覆盖的既有文件，撞上占用就不开解压
+                self.assertIn("$blocked = @()", text)
+                self.assertIn("[System.IO.FileShare]::None", text)
+                self.assertIn("[System.IO.FileMode]::Open", text)
+                self.assertLess(text.index("$blocked = @()"), text.index("Expand-Archive -LiteralPath $zip"))
+                self.assertIn("if (-not $probeOk) {", text)
+                self.assertIn("elseif ($blocked.Count -gt 0) {", text)
+                self.assertIn("未开始覆盖（一个文件都没改）", text)
+                # 锁文件时跳过解压：解压语句必须落在 else 分支里，而不是无条件执行
+                expand_at = text.index("Expand-Archive -LiteralPath $zip")
+                self.assertGreater(expand_at, text.index("elseif ($blocked.Count -gt 0) {"))
+                # 失败文案不许谎称已回退旧版
+                self.assertNotIn("已回退旧版", text)
+                self.assertIn("更新未完成，文件可能已部分覆盖，请重装或手动覆盖安装", text)
+            finally:
+                script_path.unlink(missing_ok=True)
+                (data / "updates" / "applying.flag").unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell apply script is Windows-only")
+    def test_script_traversal_check_is_segment_based(self):
+        # .. 必须是完整路径段才拦：my..file.txt 通过，../x、a/../../b 拦住，foo/..bar 通过
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen"):
+                result = updater.apply_async(root, archive, 4321, data_dir=data, expected_sha256=self._sha(archive))
+            self.assertTrue(result["ok"], result["error"])
+            script_path = Path(result["script"])
+            try:
+                text = script_path.read_text(encoding="utf-8-sig")
+                self.assertIn("($relative -split '\\\\') -contains '..'", text)
+                self.assertNotIn("$relative.Contains('..')", text)
+                # 分段判断的朴素参考实现，按同一批样例验证语义一致
+                def blocks(relative: str) -> bool:
+                    return ".." in relative.replace("/", "\\").split("\\")
+                self.assertFalse(blocks("my..file.txt"))
+                self.assertTrue(blocks("../x"))
+                self.assertTrue(blocks("a/../../b"))
+                self.assertFalse(blocks("foo/..bar"))
+            finally:
+                script_path.unlink(missing_ok=True)
+                (data / "updates" / "applying.flag").unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell autostart task is Windows-only")
+    def test_autostart_task_action_passes_no_browser(self):
+        """开机自启是后台行为：计划任务的 launcher 分支必须带 --no-browser。
+
+        查的是 -WhatIf 真打印出来的动作参数，不是源码里的字面量：脚本改成先写纯数据、
+        注册前才构造 New-ScheduledTaskAction 之后，字面量断言就跟着结构一起漂了。
+        顺带锁住看门狗的前置条件：缺无窗口启动器就宁可不装，也不每 5 分钟弹黑窗。
+        """
+        script = Path(__file__).parents[1] / "windows" / "install-task.ps1"
+
+        def run_what_if(with_hidden_runner: bool) -> tuple[int, list[str]]:
+            """造一个临时安装目录跑 -WhatIf，返回退出码与输出行。"""
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                # 空壳 launcher 只为让脚本走 launcher 分支（真判据是它存在）。
+                (root / "QQ-Notice-Hub.exe").write_bytes(b"MZ")
+                tools = root / "tools"
+                tools.mkdir()
+                (tools / "watchdog-task.ps1").write_text("# probe\n", encoding="utf-8")
+                if with_hidden_runner:
+                    (tools / "run-hidden.vbs").write_text(
+                        "' probe: 无窗口启动器\n", encoding="utf-8"
+                    )
+                result = subprocess.run(
+                    [
+                        "pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                        "-File", str(script), "-InstallDir", str(root), "-WhatIf",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                )
+            output = (result.stdout or "") + (result.stderr or "")
+            return result.returncode, output.splitlines()
+
+        returncode, lines = run_what_if(with_hidden_runner=True)
+        self.assertEqual(
+            returncode,
+            0,
+            "install-task.ps1 -WhatIf 没跑通（自启必须后台跑，不许弹浏览器）。实际输出：\n"
+            + "\n".join(lines),
+        )
+        # 只认 action 那一行：trigger 行不带 arguments，别拿它凑数。
+        service_lines = [line for line in lines if "task=NoticeHub " in line and "execute=" in line]
+        watchdog_lines = [
+            line for line in lines if "task=NapCat-QQ-Watchdog " in line and "execute=" in line
+        ]
+        self.assertTrue(
+            service_lines,
+            "没找到 NoticeHub 的动作行，自启必须后台跑，不许弹浏览器。实际 WhatIf 行：\n"
+            + "\n".join(lines),
+        )
+        self.assertIn(
+            "arguments=--no-browser",
+            service_lines[0],
+            "自启必须后台跑，不许弹浏览器。实际动作行：" + service_lines[0],
+        )
+        self.assertTrue(
+            watchdog_lines,
+            "两个前置文件都在时应该登记看门狗任务，否则服务挂了不会被拉起。"
+            "实际 WhatIf 行：\n" + "\n".join(lines),
+        )
+        watchdog_line = watchdog_lines[0]
+        self.assertIn(
+            "execute=wscript.exe",
+            watchdog_line,
+            "看门狗必须走 wscript.exe 无窗口启动，否则每 5 分钟弹黑窗。实际动作行：" + watchdog_line,
+        )
+        self.assertIn(
+            "run-hidden.vbs",
+            watchdog_line,
+            "看门狗必须经无窗口启动器中转，否则每 5 分钟弹黑窗。实际动作行：" + watchdog_line,
+        )
+        self.assertIn(
+            "watchdog-task.ps1",
+            watchdog_line,
+            "看门狗动作里得指向真正的看门狗脚本。实际动作行：" + watchdog_line,
+        )
+        self.assertNotIn(
+            "--no-browser",
+            watchdog_line,
+            "看门狗跑的是脚本，不该带浏览器开关。实际动作行：" + watchdog_line,
+        )
+
+        # 缺无窗口启动器：宁可少装一个任务，也不每 5 分钟弹黑窗。
+        returncode, lines = run_what_if(with_hidden_runner=False)
+        self.assertEqual(
+            returncode,
+            0,
+            "缺无窗口启动器时 -WhatIf 也该正常退出，不该整体失败。实际输出：\n" + "\n".join(lines),
+        )
+        self.assertFalse(
+            [line for line in lines if "task=NapCat-QQ-Watchdog" in line],
+            "缺 run-hidden.vbs 时不该登记看门狗任务，否则每 5 分钟会弹黑窗。"
+            "实际 WhatIf 行：\n" + "\n".join(lines),
+        )
+        warnings = [line for line in lines if "弹黑窗" in line and "run-hidden.vbs" in line]
+        self.assertTrue(
+            warnings,
+            "缺 run-hidden.vbs 跳过看门狗时得说清原因（提到弹黑窗与 run-hidden.vbs），"
+            "不然用户不知道为什么没装上。实际输出：\n" + "\n".join(lines),
+        )
+
+    def test_posix_apply_returns_manual_instructions_without_writing_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            updates = data / "updates"
+            updates.mkdir(parents=True)
+            release_url = "https://gitee.com/ExpertKT/notice-hub-mirror/releases/tag/v1.1.0"
+            (updates / "state.json").write_text(
+                json.dumps({"update_result": {"latest": {"html_url": release_url}}}),
+                encoding="utf-8",
+            )
+            with patch.object(updater, "_WIN", False), patch.object(
+                updater.subprocess, "Popen"
+            ) as popen, patch.object(updater.tempfile, "gettempdir", return_value=str(tmp)):
+                result = updater.apply_async(root, archive, 1, data_dir=data)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["script"], "")
+                self.assertIn("请手动下载安装", result["error"])
+                self.assertIn(release_url, result["error"])
+                self.assertIn(str(archive), result["error"])
+                self.assertFalse((data / "updates" / "applying.flag").exists())
+                self.assertEqual(list(tmp.glob("notice-hub-update-*.ps1")), [])
+                popen.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell apply script is Windows-only")
+    def test_apply_refuses_when_no_trusted_hash_is_supplied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen") as popen:
+                result = updater.apply_async(root, archive, 1, data_dir=data)
+            self.assertFalse(result["ok"])
+            self.assertIn("没有可信的更新包哈希", result["error"])
+            popen.assert_not_called()
+            self.assertFalse((data / "updates" / "applying.flag").exists())
+
+    def test_missing_zip_fails_without_writing_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            with patch.object(updater.subprocess, "Popen") as popen:
+                result = updater.apply_async(root, tmp / "nope.zip", 1, data_dir=data)
+            self.assertFalse(result["ok"])
+            self.assertIn("不存在", result["error"])
+            popen.assert_not_called()
+            self.assertFalse((data / "updates" / "applying.flag").exists())
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell launch is Windows-only")
+    def test_launch_failure_clears_flag_so_watchdog_can_recover(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "install"
+            data = tmp / "data"
+            root.mkdir()
+            archive = self._make_zip(tmp)
+            with patch.object(updater.subprocess, "Popen", side_effect=OSError("no powershell")):
+                result = updater.apply_async(root, archive, 1, data_dir=data, expected_sha256=self._sha(archive))
+            self.assertFalse(result["ok"])
+            self.assertFalse((data / "updates" / "applying.flag").exists())
+
+
+class LauncherWatchdogUpdateTests(unittest.TestCase):
+    class FakeProcess:
+        def __init__(self, polls, pid=4321):
+            self.polls = iter(polls)
+            self.returncode = None
+            self.pid = pid
+
+        def poll(self):
+            value = next(self.polls)
+            if value is not None:
+                self.returncode = value
+            return value
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    def _host(self, tmp, process):
+        from noticehub.remote import hosting
+
+        settings = type("Settings", (), {"data_dir": Path(tmp) / "data"})()
+        with patch.object(hosting, "hosting_status", return_value={"hosting_active": False}):
+            host = launcher.TrayHost(Path(tmp), Path(tmp) / ".env", settings, process, "http://127.0.0.1:1")
+        host._notify = lambda message: None
+        return host
+
+    def test_running_service_is_untouched_when_flag_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = self._host(tmp, self.FakeProcess([None]))
+            with patch.object(launcher.threading, "Thread") as thread:
+                self.assertTrue(host.watchdog_tick())
+                thread.assert_not_called()
+
+    def test_fresh_applying_flag_stops_watchdog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "data"
+            updates = data / "updates"
+            updates.mkdir(parents=True)
+            at = (datetime.now() - timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+            (updates / "applying.flag").write_text("pid=1\nat=" + at + "\n", encoding="utf-8")
+            host = self._host(tmp, self.FakeProcess([1]))
+            with patch.object(launcher.threading, "Thread") as thread:
+                self.assertFalse(host.watchdog_tick())
+                thread.assert_not_called()
+            self.assertTrue(host._watchdog_stop.is_set())
+            self.assertEqual(host.restart_failures, 0)
+            self.assertTrue((updates / "applying.flag").exists())
+
+    def test_stale_applying_flag_is_removed_and_restart_is_scheduled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "data"
+            updates = data / "updates"
+            updates.mkdir(parents=True)
+            at = (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+            flag = updates / "applying.flag"
+            flag.write_text("pid=1\nat=" + at + "\n", encoding="utf-8")
+            host = self._host(tmp, self.FakeProcess([1]))
+            with patch.object(launcher.threading, "Thread") as thread:
+                self.assertFalse(host.watchdog_tick())
+                thread.assert_called_once()
+                thread.return_value.start.assert_called_once()
+                self.assertEqual(thread.call_args.kwargs["target"], host._restart_after_delay)
+            self.assertFalse(host._watchdog_stop.is_set())
+            self.assertEqual(host.restart_failures, 1)
+            self.assertFalse(flag.exists())
+
+
+class LauncherUpdateCheckTests(unittest.TestCase):
+    def test_channel_off_skips_the_whole_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("QQ_DIGEST_UPDATE_CHANNEL=off\n", encoding="utf-8")
+            self.assertFalse(launcher._update_check_enabled(env_file))
+            self.assertEqual(launcher._update_channel(env_file), "off")
+            env_file.write_text("QQ_DIGEST_UPDATE_CHANNEL=OFF\n", encoding="utf-8")
+            self.assertFalse(launcher._update_check_enabled(env_file))
+
+    def test_channel_beta_and_stable_are_forwarded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("QQ_DIGEST_UPDATE_CHANNEL=beta\n", encoding="utf-8")
+            self.assertTrue(launcher._update_check_enabled(env_file))
+            self.assertEqual(launcher._update_channel(env_file), "beta")
+            env_file.write_text("QQ_DIGEST_UPDATE_CHANNEL=stable\n", encoding="utf-8")
+            self.assertEqual(launcher._update_channel(env_file), "stable")
+            env_file.write_text("QQ_DIGEST_UPDATE_CHANNEL=nonsense\n", encoding="utf-8")
+            self.assertIsNone(launcher._update_channel(env_file))
+
+    def test_new_version_is_announced_once_and_state_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            info = {
+                "ok": True,
+                "checked_at": "2026-10-11 13:00:00",
+                "has_update": True,
+                "error": "",
+                "latest": {"tag": "v1.1.0", "name": "群务台 1.1.0"},
+            }
+            shown = []
+            with patch.object(updater, "check", return_value=info):
+                # _notify_info 现在带 title 关键字（更新通知显式传标题）。这个替身必须收得下它，
+                # 否则调用抛 TypeError 被吞掉、shown 变空 —— CI 上就是这么红的。
+                with patch.object(launcher, "_notify_info", lambda root, message, title="": shown.append((message, title))):
+                    launcher._update_check_worker(root, data, "beta")
+                    launcher._update_check_worker(root, data, "beta")
+            self.assertEqual(len(shown), 1)
+            self.assertIn("v1.1.0", shown[0][0])
+            self.assertEqual(shown[0][1], "群务台 有新版本")
+            state = json.loads((data / "updates" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["notified_tag"], "v1.1.0")
+            self.assertEqual(state["last_check"], "2026-10-11 13:00:00")
+            self.assertTrue(state["last_result"]["has_update"])
+
+    def test_check_failure_is_swallowed_and_recorded(self):
+        """检查更新抛异常不许往上冒，而且要把失败写进 state.json。
+
+        以前这里什么都不写，页面就一直显示「还没有检查过更新」——用户分不清是没查过还是查挂了。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            with patch.object(updater, "check", side_effect=RuntimeError("boom")):
+                launcher._update_check_worker(root, data, None)  # 不许抛
+            state = json.loads((data / "updates" / "state.json").read_text(encoding="utf-8"))
+            self.assertFalse(state["last_result"]["ok"])
+            self.assertIn("boom", state["last_result"]["error"])
+            self.assertFalse(state["last_result"]["has_update"])
+            self.assertTrue(state["last_check"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows MessageBoxW")
+    def test_notify_info_never_raises(self):
+        # 必须把信息框换成假的：MessageBoxW 是模态的，真弹出来会把整个测试进程
+        # 挂死到人去点确定为止（2026-10-11 全量测试两次卡死在 16:49 就是这个）。
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("ctypes.windll.user32.MessageBoxW", return_value=1) as box:
+                launcher._notify_info(Path(tmp), "发现新版本 v1.1.0")
+        box.assert_called_once()
+
+
+_UNSET = object()
+
+
+class PatchCheckTests(SigningKeyMixin, unittest.TestCase):
+    """同版本修复包：check() 只增 patch_* 三个键，别把「有补丁可装」说成「无需更新」。"""
+
+    def setUp(self):
+        super().setUp()  # SigningKeyMixin 负责把测试公钥塞进 KNOWN_KEYS，漏了验签必失败。
+        patcher = patch.object(updater, "current_patch", return_value=0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _item(tag, version, patch, sha="a" * 64):
+        return {
+            "tag": tag,
+            "version": version,
+            "name": "notice-hub " + version,
+            "notes": "fix",
+            "published_at": "2026-10-22T00:00:00Z",
+            "asset_name": updater.ASSET_NAME,
+            "size": 12,
+            "sha256": sha,
+            "download_url": "https://example.invalid/" + updater.ASSET_NAME,
+            "patch": patch,
+        }
+
+    def _check(self, *, tag=None, items):
+        tag = tag or ("v" + APP_VERSION)
+        payload = release_payload(tag=tag)
+        manifest = _sign_manifest({"version": 1, "items": list(items)})
+        with patch.object(
+            updater.urllib.request,
+            "urlopen",
+            lambda request, timeout=None: FakeResponse([payload]),
+        ):
+            with patch.object(updater, "_fetch_manifest", return_value=manifest):
+                return updater.check(channel="beta")
+
+    def test_same_version_new_patch_offers_patch_not_version_update(self):
+        result = self._check(items=[self._item("v" + APP_VERSION, APP_VERSION, 1)])
+        self.assertTrue(result["ok"], result["error"])
+        self.assertFalse(result["has_update"])
+        self.assertEqual(result["patch_current"], 0)
+        self.assertEqual(result["patch_latest"], 1)
+        self.assertTrue(result["patch_update"])
+        # 有补丁可装的时候绝不能说「无需更新」，否则页面/托盘会自相矛盾。
+        self.assertNotIn("无需更新", result["error"])
+
+    def test_patch_latest_comes_from_the_same_version_entry(self):
+        newer = APP_VERSION + ".1"
+        result = self._check(
+            items=[
+                self._item("v" + APP_VERSION, APP_VERSION, 2),
+                self._item("v" + newer, newer, 99),
+            ]
+        )
+        self.assertFalse(result["has_update"])
+        self.assertEqual(result["patch_latest"], 2)
+
+    def test_newer_version_does_not_bleed_patch_into_patch_latest(self):
+        newer = APP_VERSION + ".1"
+        result = self._check(tag="v" + newer, items=[self._item("v" + newer, newer, 5)])
+        self.assertTrue(result["has_update"])
+        self.assertEqual(result["patch_latest"], 0)
+        self.assertFalse(result["patch_update"])
+
+
+class ManifestPatchValidationTests(SigningKeyMixin, unittest.TestCase):
+    """清单条目的 patch 缺省 0；类型不对就整条丢掉，别连累别家版本。"""
+
+    @staticmethod
+    def _item(tag, version, patch=_UNSET):
+        item = {
+            "tag": tag,
+            "version": version,
+            "name": "notice-hub " + version,
+            "notes": "",
+            "published_at": "2026-10-22T00:00:00Z",
+            "asset_name": updater.ASSET_NAME,
+            "size": 12,
+            "sha256": "a" * 64,
+            "download_url": "https://example.invalid/" + updater.ASSET_NAME,
+        }
+        if patch is not _UNSET:
+            item["patch"] = patch
+        return item
+
+    def _entries(self, items):
+        return updater._manifest_entries(
+            _sign_manifest({"version": 1, "items": list(items)})
+        )
+
+    def test_patch_defaults_to_zero(self):
+        entries = self._entries([self._item("v1.1.0-beta.18", "1.1.0-beta.18")])
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0][1]["patch"], 0)
+
+    def test_invalid_patch_skips_only_that_entry_and_says_fix_number(self):
+        for bad in ("3", -1, True, 1.5, None):
+            with self.subTest(bad=bad):
+                with self.assertLogs(updater.LOGGER, level="WARNING") as logs:
+                    entries = self._entries(
+                        [
+                            self._item("v1.1.0-beta.18", "1.1.0-beta.18", bad),
+                            self._item("v1.1.0-beta.20", "1.1.0-beta.20", 3),
+                        ]
+                    )
+                self.assertEqual(
+                    [entry[1]["tag"] for entry in entries], ["v1.1.0-beta.20"]
+                )
+                self.assertEqual(entries[0][1]["patch"], 3)
+                self.assertIn("修复号", "\n".join(logs.output))
+
+
+class PendingPatchStaleTests(unittest.TestCase):
+    """pending 记录除了版本号，还要比补丁号：同版本旧补丁同样算过期。"""
+
+    def setUp(self):
+        patcher = patch.object(updater, "current_patch", return_value=1)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_four_quadrants(self):
+        # 旧版本：过期。
+        self.assertTrue(
+            updater._pending_is_stale("1.1.0-beta.17", running=APP_VERSION, patch=5)
+        )
+        # 同版本、补丁比本机旧：过期。
+        self.assertTrue(updater._pending_is_stale(APP_VERSION, running=APP_VERSION, patch=0))
+        # 同版本、同一补丁：已经装着，过期。
+        self.assertTrue(updater._pending_is_stale(APP_VERSION, running=APP_VERSION, patch=1))
+        # 同版本、补丁比本机新：还要装，不过期。
+        self.assertFalse(updater._pending_is_stale(APP_VERSION, running=APP_VERSION, patch=2))
+
+    def test_no_patch_keeps_legacy_behaviour(self):
+        # 不传 patch 时沿用旧行为：同版本就算已装。
+        self.assertTrue(updater._pending_is_stale(APP_VERSION, running=APP_VERSION))
+
+
+class PendingPatchRoundTripTests(unittest.TestCase):
+    def test_patch_is_written_and_read_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            updates = data_dir / "updates"
+            updates.mkdir()
+            archive = updates / "QQ-Notice-Hub.zip"
+            archive.write_bytes(b"PK\x03\x04 pretend zip")
+            patcher = patch.object(updater, "current_patch", return_value=0)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            result = updater.mark_pending(
+                data_dir, zip_path=archive, version=APP_VERSION, sha256="a" * 64, patch=3
+            )
+            self.assertEqual(result, {"ok": True, "error": ""})
+            record = updater.pending_update(data_dir)
+            self.assertIsNotNone(record)
+            self.assertEqual(record["patch"], 3)
+            raw = json.loads((updates / "pending.json").read_text(encoding="utf-8"))
+            self.assertEqual(raw["patch"], 3)
+
+
+class BackupScriptTests(unittest.TestCase):
+    """备份段与回退段都在脚本正文里，且备份失败不许继续解压。"""
+
+    def _install_script(self, *, patch=2, backup_patch=1):
+        return updater._script_text(
+            Path("C:/notice-hub"),
+            Path("C:/notice-hub/updates/QQ-Notice-Hub.zip"),
+            1234,
+            Path("C:/notice-hub/data"),
+            8766,
+            "a" * 64,
+            patch=patch,
+            backup_patch=backup_patch,
+        )
+
+    def test_script_contains_backup_and_rollback_sections(self):
+        text = self._install_script()
+        self.assertIn("rollback", text)
+        self.assertIn("Compress-Archive", text)
+        self.assertIn("-Filter 'prev-*.zip'", text)
+        self.assertIn("备份失败，本次未安装", text)
+        self.assertIn("if (-not $backupOk) {", text)
+        # 备份失败时 $expanded 不许被置真，否则收尾会当成功删掉 pending.json。
+        self.assertLess(
+            text.index("if (-not $backupOk) {"), text.index("$expanded = $true")
+        )
+
+    def test_backup_is_named_with_the_pre_install_patch_number(self):
+        text = self._install_script(patch=2, backup_patch=1)
+        self.assertIn("prev-1.zip", text)
+        self.assertNotIn("prev-2.zip", text)
+
+    def test_rollback_script_deletes_the_backup_only_after_success(self):
+        text = updater._rollback_script_text(
+            Path("C:/notice-hub"),
+            Path("C:/notice-hub/data/updates/rollback/prev-1.zip"),
+            1234,
+            Path("C:/notice-hub/data"),
+            8766,
+            2,
+            1,
+        )
+        self.assertIn("Remove-Item -LiteralPath $backup", text)
+        self.assertIn("回退完成，已删除已回退的备份", text)
+        # 删除必须挂在「回退成功且服务活着」这条分支里，失败时备份要留着。
+        self.assertLess(
+            text.index("if ($restored -and $healthy) {"),
+            text.index("Remove-Item -LiteralPath $backup"),
+        )
+
+
+class RollbackNoBackupTests(unittest.TestCase):
+    def test_no_backup_returns_false_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            scripts = base / "scripts"
+            scripts.mkdir()
+            with patch.object(updater.tempfile, "gettempdir", return_value=str(scripts)):
+                with patch.object(
+                    updater.subprocess,
+                    "Popen",
+                    side_effect=AssertionError("没有备份不该启动脚本"),
+                ):
+                    result = updater.rollback_async(base / "data")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"], "没有可回退的备份")
+            self.assertEqual(result["script"], "")
+            self.assertEqual(list(scripts.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == "win32", "回退脚本只有 Windows 能跑")
+    def test_reports_from_and_to_patch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data = base / "data"
+            rollback = data / "updates" / "rollback"
+            rollback.mkdir(parents=True)
+            (rollback / "prev-1.zip").write_bytes(b"PK\x03\x04 pretend zip")
+            install = base / "install"
+            install.mkdir()
+            scripts = base / "scripts"
+            scripts.mkdir()
+            with patch.object(updater, "current_patch", return_value=2):
+                with patch.object(updater.tempfile, "gettempdir", return_value=str(scripts)):
+                    with patch.object(updater.subprocess, "Popen") as popen:
+                        result = updater.rollback_async(data, install_dir=install)
+            self.assertTrue(result["ok"], result["error"])
+            self.assertEqual(result["from_patch"], 2)
+            self.assertEqual(result["to_patch"], 1)
+            popen.assert_called_once()
+
+    def test_non_windows_refuses_with_the_backup_path(self):
+        """非 Windows 跑不了回退脚本：要说清「手动覆盖安装」并把回退包位置给出来，不许假装成功。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data = base / "data"
+            rollback = data / "updates" / "rollback"
+            rollback.mkdir(parents=True)
+            backup = rollback / "prev-1.zip"
+            backup.write_bytes(b"PK\x03\x04 pretend zip")
+            install = base / "install"
+            install.mkdir()
+            with patch.object(updater, "_WIN", False):
+                with patch.object(updater.subprocess, "Popen") as popen:
+                    result = updater.rollback_async(data, install_dir=install)
+            self.assertFalse(result["ok"], result)
+            self.assertIn("不能自动回退", result["error"])
+            self.assertIn(str(backup), result["error"], "要把回退包的位置告诉用户")
+            popen.assert_not_called()
+
+
+class PatchSkipTests(unittest.TestCase):
+    def test_skip_patch_round_trip_and_clear(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)
+            self.assertEqual(updater.skip_patch(data, 3), {"ok": True, "error": ""})
+            record = updater.patch_skip(data)
+            self.assertIsNotNone(record)
+            self.assertEqual(record["patch"], 3)
+            self.assertTrue(record["at"])
+            updater.clear_patch_skip(data)
+            self.assertIsNone(updater.patch_skip(data))
+
+
+class PatchSignatureCoverageTests(unittest.TestCase):
+    def test_patch_field_changes_canonical_payload(self):
+        without = {"version": 1, "items": [{"tag": "v1", "version": "1"}]}
+        with_patch = {"version": 1, "items": [{"tag": "v1", "version": "1", "patch": 1}]}
+        self.assertNotEqual(
+            update_signing.canonical_payload(without),
+            update_signing.canonical_payload(with_patch),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

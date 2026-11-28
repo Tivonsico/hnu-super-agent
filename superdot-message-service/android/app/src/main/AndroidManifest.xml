@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <application android:theme="@style/AppTheme" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:usesCleartextTraffic="true" android:resizeableActivity="true">
+        <!-- 刘海屏让内容铺到挖孔区，靠主题里的 windowLayoutInDisplayCutoutMode 设置；
+             它只存在于 WindowManager.LayoutParams，不是清单属性，写在 activity 上会导致 aapt 链接失败。 -->
+        <activity android:name=".MainActivity" android:screenOrientation="unspecified" android:exported="true" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="noticehub" android:host="connect" />
+            </intent-filter>
+        </activity>
+        <!-- 扫码页跟着手机转：库自带的清单把它钉成 sensorLandscape，横屏抓着手机很难对准二维码。
+             这里用 unspecified 覆盖掉方向，其余属性（theme/clearTaskOnLaunch 等）由库的清单合并进来。 -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="unspecified"
+            tools:replace="android:screenOrientation" />
+    </application>
+</manifest>

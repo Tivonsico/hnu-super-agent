@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:background="#F7F8FA">
+ <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="24dp">
+  <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="连接电脑" android:textColor="#161A23" android:textSize="28sp" android:textStyle="bold" />
+  <Button android:id="@+id/scan" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="24dp" android:backgroundTint="@color/primary" android:text="扫描群务台二维码" android:textColor="#FFFFFF" android:textSize="17sp" android:textStyle="bold" />
+  <Button android:id="@+id/manual_toggle" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:backgroundTint="#FFFFFF" android:text="手动填写地址" android:textColor="@color/primary" android:textSize="16sp" />
+  <LinearLayout android:id="@+id/manual_form" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+   <EditText android:id="@+id/address" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:hint="群务台地址" android:inputType="textUri" android:singleLine="true" android:imeOptions="actionGo" />
+   <Button android:id="@+id/open" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginTop="8dp" android:backgroundTint="@color/primary" android:text="连接并显示配对码" android:textColor="#FFFFFF" />
+   <TextView android:id="@+id/status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textColor="#70420C" android:textSize="14sp" />
+   <TextView android:id="@+id/pair_code" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="center" android:textColor="@color/primary" android:textSize="40sp" android:textStyle="bold" />
+  </LinearLayout>
+ </LinearLayout>
+</ScrollView>

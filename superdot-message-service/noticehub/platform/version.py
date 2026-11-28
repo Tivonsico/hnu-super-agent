@@ -1,0 +1,24 @@
+"""应用版本常量。
+
+只放常量，不加任何副作用/依赖：启动器（`packaging/launcher.py`）与网页端
+都要 import 它。`updater.check()` 用它和 GitHub 上的 release tag 比较，
+网页「设置 → 版本更新」用它显示「当前版本」。
+
+版本号只许往前推。发布时由维护者改这里的值，别在别处硬编码版本字符串。
+"""
+
+from __future__ import annotations
+
+APP_VERSION = "1.1.0"
+# "stable" | "beta"：决定检查 /releases/latest 还是 /releases 列表。
+# 1.1.0 起转正式版，默认走 stable：正式版用户只看到正式发布，测试版要自己切通道。
+APP_CHANNEL = "stable"
+
+# 同版本修复包的补丁号。发布修复包时 +1，不改 APP_VERSION。
+# 版本号管「有没有新版本」，补丁号管「同一版本里有没有修过东西」：
+# 两者都进更新清单，签名链路会自动覆盖这个字段（见 update_signing.canonical_payload）。
+APP_PATCH = 0
+
+__all__ = ["APP_VERSION", "APP_CHANNEL", "APP_PATCH"]
+
+

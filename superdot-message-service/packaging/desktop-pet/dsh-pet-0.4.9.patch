@@ -1,0 +1,1527 @@
+diff --git a/dsh-pet/runtime/electron-helper/index.html b/dsh-pet/runtime/electron-helper/index.html
+index 56e017a..a13fca2 100644
+--- a/dsh-pet/runtime/electron-helper/index.html
++++ b/dsh-pet/runtime/electron-helper/index.html
+@@ -7,6 +7,7 @@
+       content="default-src 'self' http: https: data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data:; media-src 'self' http: https: blob:; font-src 'self' http: https: data:"
+     />
+     <title>dsh-pet 桌宠（桌面模式）</title>
++    <link rel="stylesheet" href="./superdot.css" />
+     <style>
+       * {
+         box-sizing: border-box;
+@@ -440,6 +441,7 @@
+     <script src="./sprite/input.js"></script>
+     <script src="./sprite/bubble.js"></script>
+     <script src="./sprite/menu.js"></script>
++    <script src="./superdot.js"></script>
+     <script src="./events.js"></script>
+     <script src="./renderer.js"></script>
+   </body>
+diff --git a/dsh-pet/runtime/electron-helper/sprite.js b/dsh-pet/runtime/electron-helper/sprite.js
+index 0e1fb8c..de41ce4 100644
+--- a/dsh-pet/runtime/electron-helper/sprite.js
++++ b/dsh-pet/runtime/electron-helper/sprite.js
+@@ -98,10 +98,12 @@ class PetSprite {
+     this.initPanels();
+     this.buildDom();
+     this.bindEvents();
++    this.mountSuperdot();
+   }
+ 
+   dispose() {
+     this.ac.abort();
++    this.disposeSuperdot();
+     this.inputRegionMutation.disconnect();
+     this.inputRegionResize.disconnect();
+     this.inputRegionElements.clear();
+@@ -159,6 +161,7 @@ class PetSprite {
+   }
+ 
+   sendBounds(px, py) {
++    if (this.superdotDock) { this.reportSuperdotDock(); return; }
+     this.pos = { x: Math.round(px), y: Math.round(py) };
+     // 窗口落位与上报：系统把窗口钳回工作区时，钳掉的量转成本体在窗口内的偏移（见 fitWindow）
+     const fit = this.fitWindow();
+@@ -167,6 +170,7 @@ class PetSprite {
+     this.pos = { x: Math.round(fit.x + fit.offsetX), y: Math.round(fit.y + fit.offsetY) };
+     window.__dshPetDebug.dragPos = { x: this.pos.x, y: this.pos.y };
+     this.reportWindow(fit);
++    this.placeSuperdotEdge();
+     // 位置变了：提示跟的是光标，而光标存视口坐标，窗口一移就必须重摆，否则提示会跟着窗口漂走。
+     // 只在显示时重摆（漫游逐帧调本函数，没显示提示时不做无谓的 DOM 写入）。
+     if (this.tipOn) this.renderTip();
+diff --git a/dsh-pet/runtime/electron-helper/sprite/bubble.js b/dsh-pet/runtime/electron-helper/sprite/bubble.js
+index e7d4900..8804b8b 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/bubble.js
++++ b/dsh-pet/runtime/electron-helper/sprite/bubble.js
+@@ -58,13 +58,14 @@ Object.assign(PetSprite.prototype, {
+       this.bubble.classList.add('is-on');
+       window.__dshPetDebug.lastBubbleTitle = '待办事项';
+       this.syncInputBusy();
++      this.positionSuperdot();
+       return;
+     }
+     // 气泡单槽：同一时刻只显示一个（优先级：终态任务 > 碎碎念/对话 > 余额 > 非终态任务）。
+     // 终态任务不让位：完成/失败气泡只活 10s，被顶掉就彻底看不到；非终态气泡常驻，让位零损失。
+     // 工作气泡与碎碎念同款样式（宽度自适应 + 自动换行）；配图标记交给 CSS（带图时取消 min-width）。
+     // 图片 URL 与视频同规则：传 BASE 前缀（桌面是 file:// 页面，必须绝对地址），素材根同理。
+-    const workOn = !!(this.workOn && this.workText);
++    const workOn = !!(this.workOn && this.workText && !this.superdotState?.active);
+     const whisperOn = !!(this.whisperOn && this.whisperView);
+     const balanceOn = !!(this.bubbleOn && this.balanceView);
+     const envOn = !!(this.envOn && this.envState);
+diff --git a/dsh-pet/runtime/electron-helper/sprite/input.js b/dsh-pet/runtime/electron-helper/sprite/input.js
+index f5b4b30..96ea6b0 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/input.js
++++ b/dsh-pet/runtime/electron-helper/sprite/input.js
+@@ -238,6 +238,7 @@ Object.assign(PetSprite.prototype, {
+    * 这是渲染端专有的知识，主进程无从推断；同时上报控件矩形，菜单/聊天框外仍继续穿透。
+    */
+   inputBusy() {
++    if (this.superdotEdge && !this.superdotEdge.hidden) return true;
+     // 可点的气泡（余额翻页、工作气泡跳会话、说话气泡戳破）同样是来源：它们长在窗口里、靠窗口级 click 触发，
+     // 却悬在平时穿透的余量区，正需要借 busy + 控件矩形把它们圈出来。
+     return (
+@@ -245,6 +246,7 @@ Object.assign(PetSprite.prototype, {
+       this.menuOpen ||
+       this.chatOpen ||
+       this.todoOpen ||
++      (this.superdotStack && !this.superdotStack.hidden) ||
+       this.balanceClickable() ||
+       this.workClickable() ||
+       this.whisperClickable()
+@@ -291,7 +293,9 @@ Object.assign(PetSprite.prototype, {
+     const rects = [];
+     // 控件矩形 = 主进程允许接收点击的区域，矩形外继续穿透。可点的余额气泡悬在余量区，不登记就点不到。
+     const controls = [
+-      ...document.querySelectorAll('.dsh-pet-menu-column, .dsh-pet-chat, .dsh-pet-todo, .pet-bubble.is-clickable'),
++      ...document.querySelectorAll(
++        '.dsh-pet-menu-column, .dsh-pet-menu-crossing, .dsh-pet-chat, .dsh-pet-todo, .pet-bubble.is-clickable, .superdot-pet-stack, .superdot-edge',
++      ),
+     ];
+     for (const el of this.inputRegionElements) {
+       if (!controls.includes(el)) {
+@@ -331,6 +335,10 @@ Object.assign(PetSprite.prototype, {
+    * 光标离开身体时 pointerleave 未必派发，提示会赖在屏幕上不走；几何判定与穿透翻转同源才只有一种口径。
+    */
+   onMouseMove(e) {
++    if (this.superdotDock || e.target === this.superdotEdge) {
++      this.setInteractive(true);
++      return;
++    }
+     // 拖拽态下所有按键已松开：说明 pointerup/pointercancel/lostpointercapture 全丢了，
+     // 就地按松手收尾，否则 dragState.active 与 inputBusy 永久为 true（穿透永不恢复）。
+     if (this.dragState.active && e.buttons === 0) {
+@@ -362,7 +370,10 @@ Object.assign(PetSprite.prototype, {
+     // 光标存视口坐标（窗口原点 + 窗口内坐标）：窗口随宠物移动时贴光标不会漂。必须在 setTip 之前
+     // 更新——setTip 变显隐时会立刻渲染一次，晚一步就会用上一次的光标摆位。
+     if (inBody) this.tipCursor = { x: this.pos.x - this.winOffset.x + wx, y: this.pos.y - this.winOffset.y + wy };
+-    this.setInteractive(inBody);
++    const stack = this.superdotStack;
++    const bubble = stack && !stack.hidden ? stack.getBoundingClientRect() : null;
++    const inSuperdot = bubble && wx >= bubble.left && wx <= bubble.right && wy >= bubble.top && wy <= bubble.bottom;
++    this.setInteractive(inBody || inSuperdot);
+     // 悬浮提示与可交互判定同源（同一个 inBody）：进身体出现，离开收起
+     this.setTip(inBody);
+     // 跟随光标：位置依赖光标，每次移动都要重摆（setTip 只在显隐变化时渲染）
+@@ -441,6 +452,7 @@ Object.assign(PetSprite.prototype, {
+ 
+   /** 悬停快捷键：按住 M 说话、L 开对话、S 截图、Z 切换睡/醒、D 开关待办、1-4 切显示位置。 */
+   onHotkey(e) {
++    if (this.superdotDock) return;
+     // 按住说话先判：它要吃掉按住期间的自动重复，晚一步就会被输入框收走
+     if (this.hearHold.onKeyDown(e)) {
+       e.preventDefault();
+diff --git a/dsh-pet/runtime/electron-helper/sprite/menu.js b/dsh-pet/runtime/electron-helper/sprite/menu.js
+index 3d20406..c4e2174 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/menu.js
++++ b/dsh-pet/runtime/electron-helper/sprite/menu.js
+@@ -8,7 +8,7 @@
+ 'use strict';
+ 
+ // 菜单首项文案随宿主形态变：桌面应用唤起主窗口，独立模式打开本机 AI 设置页，web 宿主打开站点。
+-const OPEN_LABEL = { desktop: '打开软件', standalone: '打开 AI 设置', web: '打开网站' };
++const OPEN_LABEL = { desktop: '打开软件', standalone: '桌宠设置', web: '打开网站' };
+ 
+ /** 睡觉拒绝台词的气泡时长（ms）：比默认 10s 略短，它只是「被打扰了」的一句回绝。 */
+ const SLEEP_REFUSE_BUBBLE_MS = 8000;
+@@ -20,52 +20,53 @@ Object.assign(PetSprite.prototype, {
+     e.preventDefault();
+     this.stopThrow(); // 菜单弹出前停住飞行中的宠物
+     this.stopMove(); // 菜单悬停期间宠物不漫游
+-    // 桌面专属工具根项 + 共享菜单树（动作 → 分类 → 具体动画）。碎碎念/对话无条件显示：手动触发
+-    // 不受 whisperEnabled 限制（该字段只影响自动轮询）。首项文案与去向随宿主形态变，见 OPEN_LABEL。
+-    // 顺序：打开软件 / 余额 / 待办 / 碎碎念 / 对话 / 配图 / 睡觉 → 动作树 → 显示位置 / 重载配置 / 回到初始位置。
+-    const tools = [
+-      {
+-        label: OPEN_LABEL[OPEN_TARGET],
+-        action: 'open-site',
+-        hint: OPEN_SHORTCUT_HINT,
+-      },
+-      // 「查看余额」无条件显示：关了 balanceEnabled 的宠物也能点，手动请求不受开关限制，点了一定给答复。
+-      { label: '查看余额', action: 'show-balance' },
+-      // 「查询天气」与余额同一类：宿主强制刷新并写 sections.env，气泡由 /state 驱动。
+-      { label: '查询天气', action: 'show-environment' },
+-      // 「待办事项」是待办面板的唯一入口（单击宠物不再弹面板），排在余额之后。
+-      { label: '待办事项', action: 'todo', hint: S.TODO_HOTKEY_HINT },
+-      { label: '碎碎念', action: 'whisper' },
+-      { label: '对话', action: 'chat', hint: S.CHAT_HOTKEY_HINT },
+-    ];
+-    // 「配图」：与浏览器端同一份分支（纳入对话的配图 / 其他），点一张就用它说一句；没有可用图时
+-    // 返回 null，整项不出现。数据来自拍平层吹入的条目级字段（this.pet.memes / chatImageEnabled /
+-    // chatImageLimit），与网页端同一个 flattenConfigPets；缩略图走 BASE 的 /pic/memes 绝对地址
+-    // （桌面窗口是 file://，相对路径取不到图）。
+-    const memeBranch = S.buildMemeBranch(this.pet, (name) => S.memeThumbUrl(BASE, this.pet.assetRoot, name));
+-    if (memeBranch) tools.push(memeBranch);
+-    // 睡觉/起来：睡着时这一项是「起来」（点它等于叫醒），醒着时是「睡觉」。两种文案共用一个位置，
+-    // 排在「配图」之后、动作树之前（与浏览器端的菜单同一排法）。
+-    // 该条目没配 animations.sleep 就整项不出现——与配置注释「不写 = 没有睡觉功能」一致。
++    const superdotState = this.superdotState;
++    const pendingCount = superdotState?.pendingCount || 0;
++    const superdotMenu = superdotState && typeof this.openSuperdot === 'function';
++    const linked = OPEN_TARGET === 'standalone' && typeof this.openSuperdot === 'function';
++    const chat = { label: '跟大肥鱼聊天', action: 'chat', hint: S.CHAT_HOTKEY_HINT };
++    const settings = { label: OPEN_LABEL[OPEN_TARGET], action: 'open-site', hint: OPEN_SHORTCUT_HINT };
++    const tree = [];
++    if (this.superdotEdge) tree.push({ label: '贴边收起', action: 'superdot-dock' });
++    if (superdotMenu && pendingCount > 0) {
++      tree.push({
++        label: `查看 ${pendingCount} 项待处理`,
++        action: 'superdot-pending',
++      });
++    }
++    tree.push(
++      linked ? { label: '进入工作台', action: 'superdot-orders' } : chat,
++      { label: '查看天气', action: 'show-environment' },
++    );
+     if (Array.isArray(this.animations.sleep) && this.animations.sleep.length > 0) {
+-      if (this.sleeping) tools.push({ label: '起来', action: 'wake', hint: S.SLEEP_HOTKEY_HINT });
+-      else tools.push({ label: '睡觉', action: 'sleep', hint: S.SLEEP_HOTKEY_HINT });
++      tree.push(this.sleeping
++        ? { label: '起来', action: 'wake', hint: S.SLEEP_HOTKEY_HINT }
++        : { label: '睡觉', action: 'sleep', hint: S.SLEEP_HOTKEY_HINT });
+     }
+-    // 动作树之后是维护类：显示位置 → 重载配置 → 回到初始位置。
+-    const tail = [
+-      // 显示位置（仅网页/仅桌面/两者/都不）：改这只宠物的 display 配置，由宿主重载生效。
+-      // 与浏览器端注入同一份子菜单，两端文案与取值不会漂移。不就地开关窗：窗口是进程启动时按
+-      // DSH_PET_PETS 一次性建的，就地增删既改不了磁盘配置也改不了窗口数量。
+-      S.displayMenuBranch(),
+-      // 重载配置：请宿主重启桌面 Helper，全部窗口按最新配置重建。维护动作，排在回到初始位置之前。
+-      { label: '重载配置', action: 'reload' },
+-      { label: '回到初始位置', action: 'home' },
+-    ];
+-    // 第三方菜单项统一收在「更多」下：label 唯一的直接平铺，label 重名的按 owner 分子菜单。
+-    // 放在最后——「更多」不插在工具项与动作之间。
+-    const more = S.buildMoreBranch(this.menuItems);
+-    const tree = tools.concat(S.buildMenuTree(this.animations), tail, more ? [more] : []);
+-    if (!tree.length) return;
++
++    const play = S.buildMenuTree(this.animations);
++    const memes = S.buildMemeBranch(this.pet, (name) => S.memeThumbUrl(BASE, this.pet.assetRoot, name));
++    if (memes) play.unshift(memes);
++    play.push({ label: '碎碎念', action: 'whisper' });
++    tree.push(
++      { label: '玩一下', children: play },
++      linked ? { label: '桌宠设置', action: 'superdot-settings' } : settings,
++    );
++
++    const thirdPartyItems = superdotMenu ? this.menuItems.filter((item) => item.owner !== 'SuperDot') : this.menuItems;
++    const thirdParty = S.buildMoreBranch(thirdPartyItems);
++    tree.push({
++      label: '更多',
++      children: [
++        ...(linked ? [{ ...chat, label: '原生聊天' }, { ...settings, label: '原生桌宠设置' }] : []),
++        { label: '查看余额', action: 'show-balance' },
++        { label: '桌宠便签', action: 'todo', hint: S.TODO_HOTKEY_HINT },
++        { label: '回到初始位置', action: 'home' },
++        { label: '重载配置', action: 'reload' },
++        ...(OPEN_TARGET === 'standalone' ? [] : [S.displayMenuBranch()]),
++        ...(thirdParty?.children || []),
++      ],
++    });
+     this.menuOpen = true;
+     this.setInteractive(true); // 菜单是窗口内 DOM：悬停期间整窗保持可交互，关闭后恢复命中区穿透
+     this.syncInputBusy();
+@@ -92,7 +93,12 @@ Object.assign(PetSprite.prototype, {
+   /** keepFacing = 调用方已显式指定朝向：跳过下面「文字类动画点播前强制朝左」的镜像修正，显式值优先。 */
+   onMenuAction(leaf, keepFacing, fromHost) {
+     this.closeMenu();
+-    if (!leaf || typeof leaf !== 'object') return;
++    if (!leaf || typeof leaf !== 'object' || this.superdotDock) return;
++    if (leaf.action === 'superdot-dock') { this.toggleSuperdotDock(); return; }
++    if (['superdot-pending', 'superdot-orders', 'superdot-settings'].includes(leaf.action)) {
++      this.openSuperdot(leaf.action.slice('superdot-'.length));
++      return;
++    }
+     // 睡觉：打扰类动作在点击这一刻就拒绝——弹一句台词，什么都不执行。持锁时让路（锁=控制权交给第三方）。
+     // 对话弹窗、待办面板、点播动画都是渲染端行为，宿主闸门拦不到；两端用同一份放行判定。
+     if (this.sleeping && !this.frozen && !fromHost && !S.isSleepAllowedAction(leaf.action)) {
+@@ -324,12 +330,32 @@ Object.assign(PetSprite.prototype, {
+       },
+     });
+     this.chatMount = m;
++    if (OPEN_TARGET === 'standalone') void this.showChatSetup(m);
+     this.chatOpen = true; // 穿透守卫：弹窗期间整窗保持可交互
+     window.__dshPetDebug.chatOpen = true;
+     this.syncInputBusy();
+     this.setInteractive(true);
+   },
+ 
++  async showChatSetup(mount) {
++    const data = await fetch(BASE + '/models', { signal: AbortSignal.timeout(5000) })
++      .then((response) => response.ok ? response.json() : null)
++      .catch(() => null);
++    if (this.chatMount !== mount) return;
++    if (data?.ok !== true || !Array.isArray(data.providers)) {
++      mount.flash('暂时读不到聊天配置，可以从桌宠设置检查。');
++      return;
++    }
++    if (data.providers.length) return;
++    const setup = document.createElement('button');
++    setup.type = 'button';
++    setup.textContent = '配置聊天';
++    setup.addEventListener('click', () => window.petBridge?.openDshSite(ORIGIN));
++    mount.el.append(setup);
++    mount.flash('连接一个模型，就能和大肥鱼聊天。');
++    this.syncInputRegions();
++  },
++
+   // 快捷键「按住 M 说话」的两端：按下时若没有弹窗就先开一个，再让它开录；松开只收尾、不关窗，
+   // 识别结果落进输入框等用户确认（不自动发送）。
+   startHearChat() {
+@@ -350,6 +376,11 @@ Object.assign(PetSprite.prototype, {
+     }
+     const panel = S.createTodoPanel({
+       baseUrl: BASE + '/todos',
++      title: OPEN_TARGET === 'standalone' ? '桌宠便签' : undefined,
++      ...(this.superdotOnline && {
++        packagedNotes: (this.superdotPackagedNotes ??= new Set()),
++        onPackage: (note) => requestSuperdot('action', { kind: 'package-note', noteId: note.id }),
++      }),
+       onClose: () => this.closeTodo(),
+       // 点宠物本体不收起：拖它走是常见需求，收起就没法一边看清单一边挪位置。
+       keepOpenOn: (target) => typeof target?.closest === 'function' && target.closest('.pet-hit') !== null,
+diff --git a/dsh-pet/runtime/electron-helper/sprite/window-fit.js b/dsh-pet/runtime/electron-helper/sprite/window-fit.js
+index eb4ae54..d63ea73 100644
+--- a/dsh-pet/runtime/electron-helper/sprite/window-fit.js
++++ b/dsh-pet/runtime/electron-helper/sprite/window-fit.js
+@@ -30,6 +30,7 @@ Object.assign(PetSprite.prototype, {
+    * @returns 窗口内容区（屏幕坐标系，CSS 像素）x/y/width/height 与本体在窗口内的偏移 offsetX/offsetY。
+    */
+   fitWindow() {
++    this.fitSuperdot();
+     const width = this.size + this.margin.l + this.margin.r;
+     const height = this.winH + this.margin.t + this.margin.b;
+     // 工作区取本体中心所在那块屏：窗口跨屏时按本体所在屏钳，与「窗口被关在单屏工作区内」一致
+@@ -50,6 +51,7 @@ Object.assign(PetSprite.prototype, {
+       area,
+     });
+     this.applyWinOffset(fit.offsetX, fit.offsetY);
++    this.positionSuperdot();
+     return { x: fit.x, y: fit.y, width, height, offsetX: fit.offsetX, offsetY: fit.offsetY };
+   },
+ 
+diff --git a/dsh-pet/runtime/electron-helper/superdot.css b/dsh-pet/runtime/electron-helper/superdot.css
+new file mode 100644
+index 0000000..338a126
+--- /dev/null
++++ b/dsh-pet/runtime/electron-helper/superdot.css
+@@ -0,0 +1,77 @@
++.superdot-pet-stack {
++  position: fixed;
++  z-index: 5;
++  box-sizing: border-box;
++  padding: 5px 5px 8px;
++
++  color: #273953;
++  font: 13px/1.45 system-ui, sans-serif;
++  pointer-events: auto;
++}
++.superdot-pet-stack[hidden] { display: none; }
++.superdot-pet-stack [hidden] { display: none; }
++.superdot-pet-bubble > div:first-child { white-space: pre-wrap; }
++.superdot-actions, .superdot-pet-bubble nav { display: flex; gap: 8px; align-items: center; }
++.superdot-actions { margin-top: 5px; white-space: nowrap; }
++.superdot-actions button { margin-block-start: 0; }
++.superdot-pet-bubble nav { margin-inline-start: auto; gap: 4px; font-variant-numeric: tabular-nums; }
++.superdot-pet-bubble button:disabled { opacity: .5; }
++.superdot-pet-bubble nav button { min-width: 30px; }
++.superdot-pet-bubble {
++  position: relative;
++  flex: 0 0 auto;
++  margin-inline: 2px;
++  padding: 8px 11px;
++  border: 1px solid #d5dfed;
++  border-radius: 12px;
++  background: #fbfdff;
++  box-shadow: 0 2px 6px #18253b2b;
++  overflow-wrap: anywhere;
++}
++.superdot-pet-bubble:first-child::after {
++  position: absolute;
++  bottom: -5px;
++  left: calc(var(--superdot-tail, 50%) - 9px);
++  width: 8px;
++  height: 8px;
++  border-right: 1px solid #d5dfed;
++  border-bottom: 1px solid #d5dfed;
++  background: inherit;
++  content: '';
++  transform: rotate(45deg);
++  pointer-events: none;
++}
++.superdot-pet-stack.is-below .superdot-pet-bubble:first-child::after {
++  inset-block: -5px auto;
++  transform: rotate(225deg);
++}
++.superdot-pet-bubble[data-kind="action"] {
++  border-color: #adbfdd;
++  background: #f0f5fd;
++}
++.superdot-pet-bubble[data-kind="problem"] {
++  border-color: #e1b7ac;
++  background: #fff8f5;
++}
++.superdot-pet-bubble button,
++.dsh-pet-todo .superdot-note-submit {
++  margin-top: 0;
++  padding: 3px 7px;
++  border: 1px solid #bac9e1;
++  border-radius: 5px;
++  background: #fff;
++  color: #284c81;
++  font: inherit;
++  cursor: pointer;
++}
++.superdot-pet-bubble button:focus-visible,
++.dsh-pet-todo .superdot-note-submit:focus-visible { outline: 2px solid #315a9a; }
++.dsh-pet-todo .superdot-note-submit { font-size: .846em; }
++
++.superdot-edge {
++  box-sizing: border-box; position: fixed; z-index: 9; width: 22px; height: 22px;
++  border: 1px solid #a6bad6; border-radius: 8px; background: #f5f9ff; color: #294b77;
++  font: 18px/1 system-ui,sans-serif; padding: 0; cursor: pointer; pointer-events: auto;
++}
++.superdot-edge[hidden], body.superdot-folded > :not(.superdot-edge) { display: none !important; }
++body.superdot-folded > .superdot-edge { inset: 0 !important; width: 100%; height: 100%; }
+diff --git a/dsh-pet/runtime/electron-helper/superdot.js b/dsh-pet/runtime/electron-helper/superdot.js
+new file mode 100644
+index 0000000..8539032
+--- /dev/null
++++ b/dsh-pet/runtime/electron-helper/superdot.js
+@@ -0,0 +1,311 @@
++/* SuperDot's work-order bubbles are independent of the native chat and note panels. */
++'use strict';
++
++async function requestSuperdot(path, body) {
++  try {
++    const response = await fetch(BASE + '/superdot/' + path, {
++      cache: 'no-store',
++      signal: AbortSignal.timeout(5000),
++      ...(body && {
++        method: 'POST',
++        headers: { 'content-type': 'application/json' },
++        body: JSON.stringify(body),
++      }),
++    });
++    const result = await response.json();
++    if (response.ok || result.ok === false) return result;
++  } catch {
++    // The pet may run on its own or the message service may have stopped.
++  }
++  return { ok: false, message: '联系不到 SuperDot，请确认它已启动后重试。' };
++}
++
++Object.assign(PetSprite.prototype, {
++  mountSuperdot() {
++    if (OPEN_TARGET !== 'standalone' || this.pet.id !== 'main') return;
++    const stack = document.createElement('div');
++    stack.className = 'superdot-pet-stack';
++    stack.hidden = true;
++    stack.setAttribute('role', 'log');
++    stack.setAttribute('aria-label', 'SuperDot 工单提醒');
++    this.superdotStack = stack;
++    this.superdotIgnored = new Set();
++    this.superdotBaseMargin = { ...this.margin };
++    this.superdotSpoken = new Set();
++    this.el.append(stack);
++    const edge = document.createElement('button');
++    edge.type = 'button';
++    edge.className = 'superdot-edge';
++    edge.hidden = true;
++    edge.onclick = () => this.toggleSuperdotDock();
++    this.superdotEdge = edge;
++    document.body.append(edge);
++    const place = () => this.refreshSuperdotBounds();
++    const card = document.createElement('article');
++    card.className = 'superdot-pet-bubble';
++    const text = document.createElement('div');
++    const status = document.createElement('small');
++    status.setAttribute('role', 'status');
++    const actions = document.createElement('div');
++    actions.className = 'superdot-actions';
++    const makeButton = (label, fn) => {
++      const button = document.createElement('button');
++      button.type = 'button';
++      button.textContent = label;
++      button.onclick = fn;
++      return button;
++    };
++    const open = makeButton('前往查看', async () => {
++      open.disabled = true;
++      try { await this.openSuperdot(this.superdotItem.target || 'orders'); }
++      finally { open.disabled = false; }
++    });
++    const ignore = makeButton('暂时忽略', () => {
++      this.superdotIgnored.add(this.superdotItem.id);
++      this.superdotError = '';
++      this.renderSuperdot(this.superdotOnline);
++    });
++    const pager = document.createElement('nav');
++    pager.setAttribute('aria-label', '提醒翻页');
++    const page = document.createElement('span');
++    const turn = (offset) => {
++      const index = this.superdotItems.findIndex(item => item.id === this.superdotItem.id);
++      this.superdotItem = this.superdotItems[index + offset];
++      this.superdotError = '';
++      this.renderSuperdot(this.superdotOnline);
++    };
++    const previous = makeButton('‹', () => turn(-1));
++    const next = makeButton('›', () => turn(1));
++    previous.setAttribute('aria-label', '上一条');
++    next.setAttribute('aria-label', '下一条');
++    pager.append(previous, page, next);
++    actions.append(open, ignore, pager);
++    card.append(text, status, actions);
++    stack.append(card);
++    this.superdotCard = { card, text, status, pager, previous, next, page };
++    this.superdotLayoutObserver = new ResizeObserver(place);
++    this.superdotLayoutObserver.observe(this.bubble);
++    window.addEventListener('resize', place, { signal: this.ac.signal });
++    const poll = async () => {
++      const snapshot = await requestSuperdot('state');
++      if (this.ac.signal.aborted) return;
++      if (snapshot.ok && Array.isArray(snapshot.bubbles)) {
++        const wasActive = this.superdotState?.active;
++        const hadSnapshot = this.superdotState !== undefined;
++        const previousIds = new Set(this.superdotState?.bubbles.map((item) => item.id));
++        this.superdotState = snapshot;
++        this.superdotOnline = true;
++        if (wasActive !== snapshot.active) this.renderBubble();
++        if (!snapshot.active) this.superdotSpoken.clear();
++        for (const item of snapshot.bubbles) {
++          if (snapshot.active && item.speak && !this.superdotSpoken.has(item.id)) {
++            this.superdotSpoken.add(item.id);
++            if (hadSnapshot && !this.sleeping && !this.superdotDock) S.speakNotice(item.text);
++          }
++        }
++        const cue = snapshot.active && snapshot.bubbles.find((item) =>
++          !previousIds.has(item.id) && ((hadSnapshot && ['created', 'result', 'problem'].includes(item.kind)) ||
++            item.id.startsWith('preview:')));
++        if (cue && !this.superdotDock) this.playSuperdotCue(cue.kind);
++      }
++      this.superdotOnline = snapshot.ok === true;
++      this.renderSuperdot(this.superdotOnline);
++      this.superdotTimer = window.setTimeout(poll, 1000);
++    };
++    void poll();
++  },
++
++  playSuperdotCue(kind) {
++    if (this.sleeping || this.frozen || this.dragging || this.chatOpen) return;
++    const events = this.animations?.events?.workStatus;
++    const slot = kind === 'created' ? this.animations?.clicks : events?.[S.WORK_STATUS_INDEX[kind === 'result' ? 'success' : 'error']];
++    if (!slot || (Array.isArray(slot) && !slot.length)) return;
++    const anim = S.pickSlot(slot, this.anim);
++    if (anim) this.playOnce(anim);
++  },
++
++  disposeSuperdot() {
++    window.clearTimeout(this.superdotTimer);
++    window.clearTimeout(this.superdotErrorTimer);
++    this.superdotLayoutObserver?.disconnect();
++    this.superdotEdge?.remove();
++    if (this.superdotDock) {
++      document.body.classList.remove('superdot-folded');
++      S.setVoiceSuspended(false);
++    }
++  },
++
++  async openSuperdot(target) {
++    const result = await requestSuperdot('action', { kind: 'open', target });
++    if (!result.ok) this.showSuperdotError(result.message);
++    return result;
++  },
++
++  showSuperdotError(message) {
++    this.superdotError = message || '无法打开 SuperDot，请稍后重试。';
++    this.renderSuperdot(this.superdotOnline);
++    clearTimeout(this.superdotErrorTimer);
++    this.superdotErrorTimer = setTimeout(() => {
++      this.superdotError = '';
++      this.renderSuperdot(this.superdotOnline);
++    }, 6000);
++  },
++
++  renderSuperdot(isCurrent) {
++    if (!this.superdotCard) return;
++    const snapshot = this.superdotState;
++    const bubbles = snapshot?.active ? snapshot.bubbles : [];
++    const visible = bubbles.filter(item => !this.superdotIgnored.has(item.id) &&
++      (item.kind === 'action' || (!this.sleeping && isCurrent)));
++    const oldIndex = this.superdotItems?.findIndex(item => item.id === this.superdotItem?.id) ?? 0;
++    this.superdotItems = visible;
++    const item = visible.find(item => item.id === this.superdotItem?.id) ||
++      visible[Math.min(Math.max(0, oldIndex), visible.length - 1)];
++    this.superdotItem = item;
++    this.superdotStack.hidden = !item;
++    this.el.classList.toggle('superdot-pet-linked', Boolean(snapshot?.active));
++    if (item) {
++      const { card, text, status, pager, previous, next, page } = this.superdotCard;
++      card.dataset.kind = item.kind;
++      if (text.textContent !== item.text) text.textContent = item.text;
++      status.textContent = this.superdotError || '';
++      status.hidden = !this.superdotError;
++      const index = visible.indexOf(item);
++      pager.hidden = visible.length < 2;
++      previous.disabled = index === 0;
++      next.disabled = index === visible.length - 1;
++      page.textContent = (index + 1) + '/' + visible.length;
++    }
++    this.refreshSuperdotBounds();
++    this.syncInputBusy();
++  },
++
++  nearestSuperdotEdge() {
++    const { x, y } = this.pos;
++    const area = S.resolveRect(WORK_AREAS, x + this.halfW, y + this.halfH);
++    if (!area) return null;
++    const hit = this.hitRect;
++    const distances = {
++      left: x + hit.x - area.x, right: area.x + area.width - x - hit.x - hit.w,
++      top: y + hit.y - area.y, bottom: area.y + area.height - y - hit.y - hit.h,
++    };
++    const side = Object.keys(distances).reduce((a, b) => distances[a] <= distances[b] ? a : b);
++    return { side, area, distance: distances[side] };
++  },
++
++  toggleSuperdotDock() {
++    const edge = this.nearestSuperdotEdge();
++    if (!edge) return;
++    this.stopThrow();
++    this.stopMove();
++    this.closeMenu();
++    this.chatMount?.close();
++    this.closeTodo();
++    this.setTip(false);
++    this.hoverBody = false;
++    this.superdotDock = this.superdotDock ? null : edge.side;
++    document.body.classList.toggle('superdot-folded', !!this.superdotDock);
++    S.setVoiceSuspended(!!this.superdotDock);
++    this.refreshSuperdotBounds();
++    this.syncInputBusy();
++    this.setInteractive(!!this.superdotDock);
++  },
++
++  // A folded pet owns only the native window occupied by the restore handle.
++  reportSuperdotDock() {
++    const edge = this.nearestSuperdotEdge();
++    if (!edge) return;
++    const area = edge.area;
++    const side = this.superdotDock;
++    const vertical = side === 'left' || side === 'right';
++    const w = vertical ? 23 : 44, h = vertical ? 44 : 23;
++    const x = side === 'left' ? area.x : side === 'right' ? area.x + area.width - w :
++      Math.max(area.x, Math.min(this.pos.x + this.halfW - w / 2, area.x + area.width - w));
++    const y = side === 'top' ? area.y : side === 'bottom' ? area.y + area.height - h :
++      Math.max(area.y, Math.min(this.pos.y + this.halfH - h / 2, area.y + area.height - h));
++    this.updateSuperdotEdge(side, true);
++    window.petBridge?.setBounds(toScreen(x + VIEW.x), toScreen(y + VIEW.y), toScreen(w), toScreen(h),
++      toScreen(x), toScreen(y), toScreen(w), 0, 0, 0, 0, 0);
++    this.syncInputRegions();
++  },
++
++  updateSuperdotEdge(side, folded) {
++    const button = this.superdotEdge;
++    const arrows = folded ? { left:'›', right:'‹', top:'⌄', bottom:'⌃' } : { left:'‹', right:'›', top:'⌃', bottom:'⌄' };
++    const label = folded ? '展开桌宠' : '贴边收起';
++    button.hidden = false;
++    button.dataset.side = side;
++    button.textContent = arrows[side];
++    button.title = label;
++    button.setAttribute('aria-label', label);
++  },
++
++  placeSuperdotEdge() {
++    if (!this.superdotEdge || this.superdotDock) return;
++    const edge = this.nearestSuperdotEdge();
++    const area = this.visibleClampRect();
++    const wasHidden = this.superdotEdge.hidden;
++    if (!edge || edge.distance > 64 || !area) {
++      this.superdotEdge.hidden = true;
++      if (!wasHidden) this.syncInputBusy();
++      return;
++    }
++    this.updateSuperdotEdge(edge.side, false);
++    const hit = this.hit.getBoundingClientRect();
++    const x = edge.side === 'left' ? hit.left - 22 : edge.side === 'right' ? hit.right : (hit.left + hit.right)/2 - 11;
++    const y = edge.side === 'top' ? hit.top - 22 : edge.side === 'bottom' ? hit.bottom : (hit.top + hit.bottom)/2 - 11;
++    this.superdotEdge.style.left = Math.max(area.x, Math.min(x, area.x + area.w - 22)) + 'px';
++    this.superdotEdge.style.top = Math.max(area.y, Math.min(y, area.y + area.h - 22)) + 'px';
++    if (wasHidden) this.syncInputBusy();
++    else this.syncInputRegions();
++  },
++
++  refreshSuperdotBounds() {
++    if (this.pos) this.sendBounds(this.pos.x, this.pos.y);
++  },
++
++  // Compute the full card bounds in display coordinates before fitting the transparent Electron window.
++  fitSuperdot() {
++    if (!this.superdotStack || !this.pos) return;
++    const base = this.superdotBaseMargin;
++    const stack = this.superdotStack;
++    if (stack.hidden) { this.margin = base; return; }
++    const screen = S.resolveRect(WORK_AREAS, this.pos.x + this.halfW, this.pos.y + this.halfH);
++    if (!screen) return;
++    const gap = 6;
++    const maxWidth = Math.max(1, screen.width - gap * 2);
++    const hit = this.hitRect;
++    const x = this.pos.x + hit.x + hit.w / 2;
++    const top = this.pos.y + hit.y;
++    const bottom = top + hit.h;
++    let width = Math.min(350, maxWidth);
++    stack.style.width = width + 'px';
++    let height = stack.offsetHeight;
++    const above = top - screen.y - gap;
++    const below = screen.y + screen.height - bottom - gap;
++    if (height > Math.max(above, below) && width < maxWidth) {
++      width = Math.min(maxWidth, Math.max(width, Math.ceil(width * height / Math.max(120, above, below))));
++      stack.style.width = width + 'px';
++      height = stack.offsetHeight;
++    }
++    const belowPet = height > above && below > above;
++    const left = Math.max(screen.x + gap, Math.min(x - width / 2, screen.x + screen.width - width - gap));
++    const y = Math.max(screen.y + gap, Math.min(belowPet ? bottom : top - height, screen.y + screen.height - height - gap));
++    this.margin = {
++      l: Math.max(base.l, Math.ceil(this.pos.x - left)),
++      r: Math.max(base.r, Math.ceil(left + width - this.pos.x - this.size)),
++      t: Math.max(base.t, Math.ceil(this.pos.y - y)),
++      b: Math.max(base.b, Math.ceil(y + height - this.pos.y - this.winH)),
++    };
++    this.superdotBounds = { left, y };
++    stack.classList.toggle('is-below', belowPet);
++    stack.style.setProperty('--superdot-tail', Math.max(16, Math.min(width - 16, x - left)) + 'px');
++  },
++
++  positionSuperdot() {
++    if (!this.superdotBounds || this.superdotStack.hidden) return;
++    this.superdotStack.style.left = (this.superdotBounds.left - this.pos.x + this.winOffset.x) + 'px';
++    this.superdotStack.style.top = (this.superdotBounds.y - this.pos.y + this.winOffset.y) + 'px';
++    this.syncInputRegions();
++  },
++});
+diff --git a/dsh-pet/src/host/plugin/http-route.ts b/dsh-pet/src/host/plugin/http-route.ts
+index 48a9d11..8a076ba 100644
+--- a/dsh-pet/src/host/plugin/http-route.ts
++++ b/dsh-pet/src/host/plugin/http-route.ts
+@@ -42,6 +42,11 @@ export function createHttpRoute(deps: PetRouteDeps): { handlePetRoute: HttpRoute
+   ): Promise<RouteResult> => {
+     const url = new URL(rawUrl, 'http://localhost');
+     const rest = decodeURIComponent(url.pathname.slice(ROUTE_SEGMENT.length + 1));
++    if ((rest === 'superdot/state' && method === 'GET') || (rest === 'superdot/action' && method === 'POST')) {
++      const { requestSuperdot } = await import('../../standalone/server/superdot.ts');
++      const { status, payload } = await requestSuperdot(method === 'GET' ? 'state' : 'action', body);
++      return { kind: 'json', status, obj: payload };
++    }
+     const run = (): Promise<RouteResult> => dispatchPetRoute(url, rest, method, body, signal);
+     // 写配置的三条路径（PUT/POST /config、POST /pet-display、POST /pet-config）都是「读当前配置
+     // → 白名单重建整段 pets → 写盘」，并发交错会互相覆盖，必须共用一条串行队列；
+diff --git a/dsh-pet/src/shared/menu/css.ts b/dsh-pet/src/shared/menu/css.ts
+index f840605..a1d7168 100644
+--- a/dsh-pet/src/shared/menu/css.ts
++++ b/dsh-pet/src/shared/menu/css.ts
+@@ -14,6 +14,7 @@ export const MENU_CSS = [
+   '.dsh-pet-menu{position:fixed;left:0;top:0;z-index:2147483000;color:#2b2b2b;font-size:13px;line-height:1.5;',
+   "font-family:'Microsoft YaHei UI','Segoe UI','PingFang SC',sans-serif;user-select:none;pointer-events:auto}",
+   '.dsh-pet-menu,.dsh-pet-menu *{box-sizing:border-box}',
++  '.dsh-pet-menu-crossing{position:absolute}',
+   '.dsh-pet-menu-column{position:absolute;min-width:150px;max-width:300px;padding:4px;',
+   'background:rgba(255,255,255,.98);border:1px solid rgba(0,0,0,.12);border-radius:8px;',
+   'box-shadow:0 8px 28px rgba(0,0,0,.2);max-height:min(62vh,460px);overflow-y:auto;',
+diff --git a/dsh-pet/src/shared/menu/mount.ts b/dsh-pet/src/shared/menu/mount.ts
+index 0e5a668..1a78343 100644
+--- a/dsh-pet/src/shared/menu/mount.ts
++++ b/dsh-pet/src/shared/menu/mount.ts
+@@ -8,6 +8,8 @@
+ import type { ContextMenuMount, MenuBranch, MenuLeaf, MenuNode } from './types.ts';
+ import { pickPanelPosition } from './position.ts';
+ 
++const HOVER_DELAY = 140;
++
+ function isBranchNode(n: MenuNode): n is MenuBranch {
+   return 'children' in n && Array.isArray((n as MenuBranch).children);
+ }
+@@ -45,12 +47,16 @@ export function mountContextMenu(opts: {
+ 
+   /** 每个面板当前展开的子面板（无 = 未展开）；hideChain 会沿链清除 */
+   const openChild = new Map<HTMLElement, HTMLElement>();
++  const crossings = new Map<HTMLElement, HTMLElement>();
++  let hoverTimer: number | null = null;
+   /** 指针整体离开菜单树的兜底关闭定时器（root mouseover 重新进入即取消） */
+   let leaveTimer: number | null = null;
+ 
+   /** 关闭某面板及其后代面板整条链（display:none + 清 openChild 链） */
+   const hideChain = (panel: HTMLElement): void => {
+     panel.style.display = 'none';
++    crossings.get(panel)?.remove();
++    crossings.delete(panel);
+     const child = openChild.get(panel);
+     if (child) {
+       openChild.delete(panel);
+@@ -81,6 +87,41 @@ export function mountContextMenu(opts: {
+     });
+     panel.style.left = pick.left + 'px';
+     panel.style.top = pick.top + 'px';
++    crossings.get(panel)?.remove();
++    crossings.delete(panel);
++    const child = panel.getBoundingClientRect();
++    const left = child.left >= pr.right ? pr.right : child.right;
++    const right = child.left >= pr.right ? child.left : pr.left;
++    const width = right - left;
++    if (width <= 0 || width > 12) return;
++    // 让指针慢慢移过两列之间的空隙也能保住子菜单。透明区只占两列之间的一小段。
++    const y = Math.max(child.top + 4, Math.min((rect.top + rect.bottom) / 2, child.bottom - 4));
++    const crossing = document.createElement('div');
++    crossing.className = 'dsh-pet-menu-crossing';
++    crossing.setAttribute('aria-hidden', 'true');
++    Object.assign(crossing.style, {
++      left: left + 'px',
++      top: Math.min(rect.top, y - 4) + 'px',
++      width: width + 'px',
++      height: Math.max(rect.bottom, y + 4) - Math.min(rect.top, y - 4) + 'px',
++    });
++    root.appendChild(crossing);
++    crossings.set(panel, crossing);
++  };
++
++  const cancelHover = (): void => {
++    if (hoverTimer !== null) window.clearTimeout(hoverTimer);
++    hoverTimer = null;
++  };
++  const onHover = (item: HTMLElement, activate: () => void): void => {
++    item.addEventListener('mouseenter', () => {
++      cancelHover();
++      hoverTimer = window.setTimeout(() => {
++        hoverTimer = null;
++        activate();
++      }, HOVER_DELAY);
++    });
++    item.addEventListener('mouseleave', cancelHover);
+   };
+ 
+   /** 构建一层面板；分支项的子面板平级挂到 root 下、不嵌套。
+@@ -106,19 +147,25 @@ export function mountContextMenu(opts: {
+         item.appendChild(label);
+         item.appendChild(arrow);
+         const childPanel = buildPanel(node.children); // 递归：子面板已入树（晚于本面板）
+-        // 悬停分支：先收掉本面板其它分支已展开的子面板链，再展开当前的。
+-        // 指针在本菜单树内移动绝不自动收起——跨 4px 缝隙或面板间隙都不会触发关闭。
+-        item.addEventListener('mouseenter', () => {
++        const openBranch = (): void => {
+           const prev = openChild.get(panel);
+-          if (prev && prev !== childPanel) hideChain(prev);
++          if (prev === childPanel) return;
++          if (prev) hideChain(prev);
+           openChild.set(panel, childPanel);
+           showPanel(childPanel, item);
++        };
++        onHover(item, openBranch);
++        item.addEventListener('click', (e) => {
++          e.preventDefault();
++          cancelHover();
++          openBranch();
+         });
+       } else {
+         // 叶子项不展开子菜单；进入时收起同面板已展开的子面板链，否则它会一直挂着
+-        item.addEventListener('mouseenter', () => {
++        onHover(item, () => {
+           const prev = openChild.get(panel);
+           if (prev) hideChain(prev);
++          openChild.delete(panel);
+         });
+         // 缩略图必须在 label 之前：菜单项是 flex 行，图片靠左、文字紧随其后。
+         // 只给配图叶子带 thumb，其余项结构不变（不占位、不改变行高）。
+@@ -203,6 +250,7 @@ export function mountContextMenu(opts: {
+   const close = (): void => {
+     if (closed) return;
+     closed = true;
++    cancelHover();
+     if (leaveTimer !== null) window.clearTimeout(leaveTimer);
+     leaveTimer = null;
+     document.removeEventListener('mousedown', onDocPointerDown, true);
+diff --git a/dsh-pet/src/shared/menu/position.test.ts b/dsh-pet/src/shared/menu/position.test.ts
+index b176bc4..0247fbd 100644
+--- a/dsh-pet/src/shared/menu/position.test.ts
++++ b/dsh-pet/src/shared/menu/position.test.ts
+@@ -36,7 +36,7 @@ describe('pickPanelPosition —— 级联面板不重叠', () => {
+       clamp: CLAMP,
+     });
+     assert.ok(!overlaps(box(p.left, p.top, panel.w, panel.h), parent), '子面板不应压住父面板');
+-    assert.equal(p.left, parent.right + 4, '右侧放得下时应贴父面板右侧');
++    assert.equal(p.left, parent.right + 12, '右侧放得下时应贴父面板右侧');
+   });
+ 
+   test('二级：右侧放不下 → 翻到父面板左侧（不是触发项左侧）', () => {
+@@ -49,7 +49,7 @@ describe('pickPanelPosition —— 级联面板不重叠', () => {
+       clamp: CLAMP,
+     });
+     assert.ok(!overlaps(box(p.left, p.top, panel.w, panel.h), parent), '翻左后不应压住父面板');
+-    assert.equal(p.left, parent.left - 4 - panel.w, '应贴父面板左侧，而不是触发项左侧');
++    assert.equal(p.left, parent.left - 12 - panel.w, '应贴父面板左侧，而不是触发项左侧');
+   });
+ 
+   test('三级：右侧放不下时不得压到二级或一级', () => {
+@@ -67,6 +67,19 @@ describe('pickPanelPosition —— 级联面板不重叠', () => {
+     assert.ok(!overlaps(rect, l2), '三级不应压住二级');
+   });
+ 
++  test('三级向右展开时，沿用二级的 12px 间距', () => {
++    const root = box(20, 50, 220, 320);
++    const parent = box(252, 70, 220, 320);
++    const p = pickPanelPosition({
++      panel,
++      item: { left: 252, right: 472, top: 90 },
++      parent,
++      others: [root, parent],
++      clamp: CLAMP,
++    });
++    assert.equal(p.left - parent.right, 12);
++  });
++
+   test('候选全被占用时，优先选不重叠的位置（即使脱离紧贴父面板）', () => {
+     const l1 = box(0, 0, 220, 520);
+     const l2 = box(224, 0, 220, 520);
+@@ -118,7 +131,7 @@ describe('pickPanelPosition —— 级联面板不重叠', () => {
+     assert.ok(p.top >= 4 - 0.5 && p.top + 120 <= 200 - 4 + 0.5, 'top 越界');
+   });
+ 
+-  test('没有其它面板时与旧行为一致（右侧展开、顶对齐触发项）', () => {
++  test('没有其它面板时仍向右展开并顶对齐触发项', () => {
+     const p = pickPanelPosition({
+       panel: { w: 220, h: 320 },
+       item: { left: 100, right: 320, top: 150 },
+@@ -126,6 +139,6 @@ describe('pickPanelPosition —— 级联面板不重叠', () => {
+       others: [],
+       clamp: CLAMP,
+     });
+-    assert.deepEqual(p, { left: 324, top: 150 });
++    assert.deepEqual(p, { left: 332, top: 150 });
+   });
+ });
+diff --git a/dsh-pet/src/shared/menu/position.ts b/dsh-pet/src/shared/menu/position.ts
+index f1f6459..c19e172 100644
+--- a/dsh-pet/src/shared/menu/position.ts
++++ b/dsh-pet/src/shared/menu/position.ts
+@@ -26,8 +26,8 @@ export interface PanelPositionInput {
+   clamp: { x: number; y: number; w: number; h: number };
+ }
+ 
+-/** 面板与边界、面板之间的间距（px）。 */
+-const PANEL_GAP = 4;
++const EDGE_GAP = 4;
++const PANEL_GAP = 12;
+ 
+ /**
+  * 决定子面板的落点：优先不与任何已展开面板重叠，其次贴边。
+@@ -37,10 +37,10 @@ const PANEL_GAP = 4;
+  */
+ export function pickPanelPosition(input: PanelPositionInput): { left: number; top: number } {
+   const { panel, item, parent, others, clamp } = input;
+-  const minLeft = clamp.x + PANEL_GAP;
+-  const minTop = clamp.y + PANEL_GAP;
+-  const maxLeft = clamp.x + clamp.w - PANEL_GAP - panel.w;
+-  const maxTop = clamp.y + clamp.h - PANEL_GAP - panel.h;
++  const minLeft = clamp.x + EDGE_GAP;
++  const minTop = clamp.y + EDGE_GAP;
++  const maxLeft = clamp.x + clamp.w - EDGE_GAP - panel.w;
++  const maxTop = clamp.y + clamp.h - EDGE_GAP - panel.h;
+   /** 夹进 clamp；面板比 clamp 还宽/高时贴左上角。 */
+   const clampX = (v: number): number => Math.max(minLeft, Math.min(v, Math.max(minLeft, maxLeft)));
+   const clampY = (v: number): number => Math.max(minTop, Math.min(v, Math.max(minTop, maxTop)));
+diff --git a/dsh-pet/src/shared/todo/panel.ts b/dsh-pet/src/shared/todo/panel.ts
+index ac3b899..43c28db 100644
+--- a/dsh-pet/src/shared/todo/panel.ts
++++ b/dsh-pet/src/shared/todo/panel.ts
+@@ -14,6 +14,9 @@ import type { TodoItem } from './types.ts';
+ export interface TodoPanelOptions {
+   /** 接口基址；桌面端可传绝对地址，缺省走同源前缀。 */
+   baseUrl?: string;
++  title?: string;
++  packagedNotes?: Set<string>;
++  onPackage?: (todo: TodoItem) => Promise<{ ok: boolean; message?: string }>;
+   /** 点面板外面时调用；显隐由槽位决定，面板不自己收。 */
+   onClose?: () => void;
+   /** 这次按下的落点是否该让面板留着；两端各判各的命中层，面板不认识它们的类名。 */
+@@ -36,19 +39,46 @@ export interface TodoPanel {
+  */
+ export function createTodoPanel(options: TodoPanelOptions = {}): TodoPanel {
+   injectTodoCss();
+-  const parts = createTodoPanelParts();
++  const parts = createTodoPanelParts(options.title);
+   const baseUrl = options.baseUrl ?? TODOS_PATH;
+   let disposed = false;
+   let busy = false;
+   let todos: TodoItem[] = [];
++  const packaged = options.packagedNotes ?? new Set<string>();
+ 
+   // 三个函数互相引用（列表回调 → 修改 → 重拉 → 渲染）：mutate / reload 用函数声明提升，
+   // 回调里引用它们不会在构造期求值，也就不存在初始化顺序问题。
+   const handlers: TodoListHandlers = {
+     onToggle: (todo, done) => void mutate(() => patchTodo(todo.id, { done }, baseUrl)),
+     onDelete: (todo) => void mutate(() => removeTodo(todo.id, baseUrl)),
++    ...(options.onPackage && {
++      onPackage: (todo: TodoItem, button: HTMLButtonElement) => void packageNote(todo, button),
++      isPackaged: (todo: TodoItem) => packaged.has(todo.id),
++    }),
+   };
+ 
++  async function packageNote(todo: TodoItem, button: HTMLButtonElement): Promise<void> {
++    if (!options.onPackage || disposed || busy || packaged.has(todo.id)) return;
++    busy = true;
++    setTodoBusy(parts, true);
++    setTodoError(parts, null);
++    button.disabled = true;
++    button.textContent = '正在转为消息包…';
++    let result: { ok: boolean; message?: string };
++    try {
++      result = await options.onPackage(todo);
++    } catch {
++      result = { ok: false, message: '无法联系 SuperDot，请重试。' };
++    }
++    busy = false;
++    if (result.ok) packaged.add(todo.id);
++    if (disposed) return;
++    setTodoBusy(parts, false);
++    button.disabled = result.ok;
++    button.textContent = result.ok ? '已转为消息包' : '转为消息包';
++    if (!result.ok) setTodoError(parts, result.message || '便签未转为消息包，请重试。');
++  }
++
+   /** 重新拉整张清单：修改一律以宿主返回为准，不在本地猜结果。 */
+   async function reload(): Promise<void> {
+     const result = await loadTodos(baseUrl);
+diff --git a/dsh-pet/src/shared/todo/render.ts b/dsh-pet/src/shared/todo/render.ts
+index 4615bb4..942e838 100644
+--- a/dsh-pet/src/shared/todo/render.ts
++++ b/dsh-pet/src/shared/todo/render.ts
+@@ -38,6 +38,8 @@ export interface TodoListHandlers {
+   onToggle: (todo: TodoItem, done: boolean) => void;
+   /** 删除（调用方已确认过一次）。 */
+   onDelete: (todo: TodoItem) => void;
++  onPackage?: (todo: TodoItem, button: HTMLButtonElement) => void;
++  isPackaged?: (todo: TodoItem) => boolean;
+ }
+ 
+ /** 删除按钮的二次确认窗口（ms）：超时自动复原，避免「确认」态一直挂着。 */
+@@ -75,13 +77,13 @@ function fold(className: string, children: HTMLElement[]): HTMLDivElement {
+  *
+  * @returns 面板需要的全部元素引用。
+  */
+-export function createTodoPanelParts(): TodoPanelParts {
++export function createTodoPanelParts(titleText = '待办事项'): TodoPanelParts {
+   const root = element('div', 'dsh-pet-todo');
+   root.setAttribute('role', 'dialog');
+-  root.setAttribute('aria-label', '待办事项');
++  root.setAttribute('aria-label', titleText);
+ 
+   const head = element('div', 'dsh-pet-todo-head');
+-  const title = element('span', 'dsh-pet-todo-title', '待办事项');
++  const title = element('span', 'dsh-pet-todo-title', titleText);
+   const count = element('span', 'dsh-pet-todo-count', '0 项未完成');
+   count.setAttribute('aria-live', 'polite');
+   const closeButton = element('button', 'dsh-pet-todo-close', '✕');
+@@ -179,6 +181,14 @@ function renderItem(todo: TodoItem, handlers: TodoListHandlers, now: number): HT
+   const text = element('div', 'dsh-pet-todo-text', todo.text);
+   const meta = element('div', 'dsh-pet-todo-meta', metaLabel(todo, now));
+   main.append(text, meta);
++  if (handlers.onPackage) {
++    const packaged = handlers.isPackaged?.(todo) === true;
++    const submit = element('button', 'superdot-note-submit', packaged ? '已转为消息包' : '转为消息包');
++    submit.type = 'button';
++    submit.disabled = packaged;
++    submit.addEventListener('click', () => handlers.onPackage?.(todo, submit));
++    main.append(submit);
++  }
+ 
+   const remove = element('button', 'dsh-pet-todo-del', '✕');
+   remove.type = 'button';
+diff --git a/dsh-pet/src/shared/voice.ts b/dsh-pet/src/shared/voice.ts
+index f5e90d5..08a5e73 100644
+--- a/dsh-pet/src/shared/voice.ts
++++ b/dsh-pet/src/shared/voice.ts
+@@ -207,7 +207,10 @@ export function playSayVoice(say: { readonly text: string; readonly voiceTo?: Vo
+  * @param canPlayHidden - 页面隐藏时是否继续播；缺省 `false`（藏起来就静音）。
+  */
+ async function speakWhenReady(text: string, canPlayHidden = false): Promise<void> {
++  if (voiceSuspended) return;
++  const generation = suspendGeneration;
+   await loadConfigOnce();
++  if (generation !== suspendGeneration) return;
+   const seq = ++utteranceSeq;
+   // 先报开始再置 loading：气泡要靠这条事件挂起收起计时，晚一步它就可能已经收了。
+   emitUtterance({ kind: 'start', seq, text });
+@@ -362,6 +365,23 @@ export type SpeakPhase = 'idle' | 'loading' | 'playing' | 'failed';
+ 
+ /** 手动点播的世代号：新的点播会作废旧请求的阶段回调，避免旧回调清掉新状态。 */
+ let manualSeq = 0;
++let voiceSuspended = false;
++let suspendGeneration = 0;
++
++// A folded desktop pet stays silent until its handle is opened.
++export function setVoiceSuspended(value: boolean): void {
++  if (voiceSuspended === value) return;
++  voiceSuspended = value;
++  suspendGeneration++;
++  if (value) {
++    autoSeq++;
++    manualSeq++;
++    stopAutoAudio();
++    manualAudio?.pause();
++    manualAudio = null;
++    setVoiceState('idle');
++  }
++}
+ 
+ /**
+  * 手动播报一句（对话面板的喇叭按钮用）。
+@@ -372,7 +392,7 @@ let manualSeq = 0;
+  * @param onPhase - 阶段回调：请求合成时 `loading`、音频就绪开始播时 `playing`、播完 `idle`、失败或超时 `failed`。
+  */
+ export function speakText(text: string, onPhase?: (phase: SpeakPhase) => void): void {
+-  if (!text) return;
++  if (!text || voiceSuspended) return;
+   void playManual(text, onPhase);
+ }
+ 
+diff --git a/dsh-pet/src/standalone/request-security.ts b/dsh-pet/src/standalone/request-security.ts
+index 8edbd2a..7de58c3 100644
+--- a/dsh-pet/src/standalone/request-security.ts
++++ b/dsh-pet/src/standalone/request-security.ts
+@@ -32,7 +32,7 @@ function publicRead(req: IncomingMessage): boolean {
+   const path = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname);
+   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+   if (['/standalone-ai/settings', '/shutdown'].includes(path)) return false;
+-  if (/^\/dsh-pet-\d+\/(?:whisper|chat)(?:\/|$)/.test(path)) return false;
++  if (/^\/dsh-pet-\d+\/(?:whisper|chat|superdot)(?:\/|$)/.test(path)) return false;
+   return (
+     [
+       '/',
+diff --git a/dsh-pet/src/standalone/server/listener.ts b/dsh-pet/src/standalone/server/listener.ts
+index 51e5cbf..67ac1b2 100644
+--- a/dsh-pet/src/standalone/server/listener.ts
++++ b/dsh-pet/src/standalone/server/listener.ts
+@@ -17,6 +17,7 @@ import { DEFAULT_STANDALONE_PORT, PORT_SCAN_LIMIT } from './options.ts';
+ import type { StandaloneServer, StandaloneServerOptions } from './options.ts';
+ import { balanceHandler, modelsHandler, settingsHandler, testHandler } from './handlers.ts';
+ import { fail, matches, sendAsset, sendIcon, sendJson } from './respond.ts';
++import { handleSuperdot } from './superdot.ts';
+ 
+ /** 组装请求分发器：先处理探针、设置页与停机，再交给插件路由。 */
+ function dispatch(
+@@ -34,6 +35,11 @@ function dispatch(
+       res.end();
+       return;
+     }
++    if (pathname.startsWith('/dsh-pet-7340/superdot/')) {
++      if (!shutdownSecurity) rejectRequest(res, 403, '请启动带本机鉴权的桌宠。');
++      else void handleSuperdot(req, res, pathname).catch((error: unknown) => fail(res, error, options.logger));
++      return;
++    }
+     if (pathname === '/' || pathname === '/health') {
+       if (method !== 'GET' && method !== 'HEAD') {
+         rejectRequest(res, 405, '仅支持 GET');
+diff --git a/dsh-pet/src/standalone/server/superdot.ts b/dsh-pet/src/standalone/server/superdot.ts
+new file mode 100644
+index 0000000..39ebae5
+--- /dev/null
++++ b/dsh-pet/src/standalone/server/superdot.ts
+@@ -0,0 +1,69 @@
++import type { IncomingMessage, ServerResponse } from 'node:http';
++import { sendJson } from './respond.ts';
++
++const prefix = '/dsh-pet-7340/superdot/';
++const disconnected = { ok: false, message: 'SuperDot 未连接，请打开 SuperDot 后重试。' };
++let connection: { port: number; key: string } | undefined;
++
++export async function requestSuperdot(segment: 'state' | 'action', body?: string) {
++  const peer = connection;
++  if (!peer) return { status: 503, payload: disconnected };
++  try {
++    const response = await fetch(`http://127.0.0.1:${peer.port}/api/desktop-pet/${segment}`, {
++      method: segment === 'state' ? 'GET' : 'POST',
++      headers: { 'X-SuperDot-Desktop-Pet': peer.key, 'Content-Type': 'application/json' },
++      body: segment === 'action' ? body : undefined,
++      redirect: 'error',
++      signal: AbortSignal.timeout(6000),
++    });
++    return { status: response.status, payload: await response.json() };
++  } catch {
++    return { status: 503, payload: disconnected };
++  }
++}
++
++async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | null> {
++  try {
++    const chunks: Buffer[] = [];
++    let size = 0;
++    for await (const chunk of req) {
++      const data = Buffer.from(chunk);
++      size += data.length;
++      if (size > 8192) return null;
++      chunks.push(data);
++    }
++    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
++    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
++  } catch {
++    return null;
++  }
++}
++
++export async function handleSuperdot(req: IncomingMessage, res: ServerResponse, pathname: string) {
++    const segment = pathname.slice(prefix.length);
++    const method = req.method;
++    if (segment === 'connect' && method === 'POST') {
++      const packet = await readJson(req);
++      const port = packet?.port;
++      const key = packet?.key;
++      if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535 ||
++          typeof key !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(key)) {
++        sendJson(res, 400, { ok: false, message: 'SuperDot 本机连接参数无效。' });
++        return;
++      }
++      connection = { port, key };
++      sendJson(res, 200, { ok: true });
++      return;
++    }
++    if ((segment !== 'state' || method !== 'GET') && (segment !== 'action' || method !== 'POST')) {
++      sendJson(res, 404, { ok: false, message: '桌宠操作不存在。' });
++      return;
++    }
++    const body = method === 'POST' ? await readJson(req) : undefined;
++    if (body === null) {
++      sendJson(res, 400, { ok: false, message: '桌宠操作内容无效。' });
++      return;
++    }
++    const { status, payload } = await requestSuperdot(segment, body ? JSON.stringify(body) : undefined);
++    sendJson(res, status, payload);
++}
+diff --git a/dsh-pet/src/standalone/settings-page/chrome.ts b/dsh-pet/src/standalone/settings-page/chrome.ts
+index 759f709..12bb4fa 100644
+--- a/dsh-pet/src/standalone/settings-page/chrome.ts
++++ b/dsh-pet/src/standalone/settings-page/chrome.ts
+@@ -18,18 +18,22 @@ export const settingsPage = `<!doctype html>
+ <aside class="side">
+ <div class="brand"><img class="brandLogo" src="/standalone-ai/icon.png" alt=""><span>桌宠</span></div>
+ <nav class="nav" aria-label="设置分区"><div class="navList" role="tablist">
+-<button type="button" class="navCell" role="tab" id="tab-chat" data-tab="chat" data-title="对话" aria-controls="panel-chat" aria-selected="true"><svg class="navGlyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.4h10a1.1 1.1 0 0 1 1.1 1.1v5.6A1.1 1.1 0 0 1 13 11.2H8.2L5 13.6v-2.4H3a1.1 1.1 0 0 1-1.1-1.1V4.5A1.1 1.1 0 0 1 3 3.4Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="navLabel">对话</span></button>
+-<button type="button" class="navCell" role="tab" id="tab-config" data-tab="config" data-title="配置" aria-controls="panel-config" aria-selected="false"><svg class="navGlyph" viewBox="0 0 16 16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.6 4.6h10.8M2.6 11.4h10.8"/><circle cx="6.2" cy="4.6" r="1.6" fill="currentColor" stroke="none"/><circle cx="9.8" cy="11.4" r="1.6" fill="currentColor" stroke="none"/></g></svg><span class="navLabel">配置</span></button>
++<button type="button" class="navCell" role="tab" id="tab-config" data-tab="config" data-title="桌宠设置" aria-controls="panel-config" aria-selected="true"><svg class="navGlyph" viewBox="0 0 16 16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.6 4.6h10.8M2.6 11.4h10.8"/><circle cx="6.2" cy="4.6" r="1.6" fill="currentColor" stroke="none"/><circle cx="9.8" cy="11.4" r="1.6" fill="currentColor" stroke="none"/></g></svg><span class="navLabel">设置</span></button>
++<button type="button" class="navCell" role="tab" id="tab-chat" data-tab="chat" data-title="对话" aria-controls="panel-chat" aria-selected="false"><svg class="navGlyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.4h10a1.1 1.1 0 0 1 1.1 1.1v5.6A1.1 1.1 0 0 1 13 11.2H8.2L5 13.6v-2.4H3a1.1 1.1 0 0 1-1.1-1.1V4.5A1.1 1.1 0 0 1 3 3.4Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="navLabel">对话</span></button>
+ </div></nav>
+ <div class="sideFoot">独立模式</div>
+ </aside>
+ <div class="main">
+-<div class="topbar"><h1 class="pageTitle" id="page-title">对话</h1><span class="dirty" id="dirty" hidden>有未保存的改动</span></div>
++<div class="topbar"><h1 class="pageTitle" id="page-title">桌宠设置</h1><span class="dirty" id="dirty" hidden>有未保存的改动</span></div>
+ <div class="options">
+-<section class="panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config" hidden>
++<section class="panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
+ <div class="scroll">
+ <div id="pet-cards"><p class="empty">正在读取本机配置…</p></div>
+-<div class="footer"><p class="status" id="pet-status" role="status" aria-live="polite"></p><button class="btn primary" id="pet-save" type="button" disabled>保存</button></div>
++<div class="footer petSave"><p class="status" id="pet-status" role="status" aria-live="polite"></p><button class="btn primary" id="pet-save" type="button" disabled>保存桌宠设置</button></div>
++<div class="superdotLink" id="superdot-link" hidden><button class="btn ghost" id="superdot-settings" type="button">管理 SuperDot 工单提醒</button><p class="status" id="superdot-status" role="status" aria-live="polite"></p></div>
++<div class="settingsMore">
++<details id="chat-settings"><summary>聊天与语音</summary>
++<div class="settingsContents" id="pet-chat-settings"></div>
+ <form id="settings" aria-describedby="privacy">
+ <div class="card"><div class="cardHead"><h2 class="cardTitle">模型连接</h2></div>
+ <p class="cardHint">独立模式自己连服务商，不经过 DSH；所有配置只保存在当前机器。</p>
+@@ -38,15 +42,23 @@ export const settingsPage = `<!doctype html>
+ <div class="field"><label for="model">模型名称</label><div class="combo" id="model-combo"><input id="model" name="model" type="text" maxlength="200" placeholder="填写或拉取服务商的模型 ID，例如 deepseek-chat" spellcheck="false" aria-describedby="model-note"><button id="model-toggle" class="comboToggle" type="button" aria-label="拉取并选择模型" aria-haspopup="listbox" aria-expanded="false"></button></div><p class="fieldHint" id="model-note">可以直接手填；点右侧箭头向端点拉取可用列表后选择。拉取只用本次填写的地址与密钥，不会保存。</p><p class="status" id="model-result" role="status" aria-live="polite"></p></div>
+ <div class="field"><label for="apiKey">API 密钥 <span class="hintInline" id="key-state">尚未读取</span></label><input id="apiKey" name="apiKey" type="password" autocomplete="new-password" maxlength="8192" placeholder="留空保留已保存的密钥" aria-describedby="key-note"><div class="keyActions" id="key-actions" hidden><button id="key-delete" class="btn ghost" type="button">删除已保存的密钥</button></div><p id="key-note" class="fieldHint">密钥只写入本机配置，不会回显。留空会保留旧密钥，要彻底删除请点上面的按钮。</p></div>
+ <div class="field"><label for="deepseekApiKey">DeepSeek 语音密钥 <span class="hintInline" id="deepseek-key-state">尚未读取</span></label><input id="deepseekApiKey" name="deepseekApiKey" type="password" autocomplete="new-password" maxlength="4096" placeholder="留空保留已保存的密钥" aria-describedby="deepseek-key-note"><div class="keyActions" id="deepseek-key-actions" hidden><button id="deepseek-key-delete" class="btn ghost" type="button">删除已保存的语音密钥</button></div><p id="deepseek-key-note" class="fieldHint">只给 DeepSeek 语音合成与识别用，和上面的对话密钥分开存——对话走别家服务商时也能单独用 DeepSeek 语音。留空则依次沿用「余额选 DeepSeek 时的那把密钥」。</p></div>
++
++<details class="modelBalance"><summary>余额查询</summary>
+ <div class="field"><span class="fieldLabel" id="balance-provider-label">余额查询服务商</span><div id="balance-provider-host"></div><p class="fieldHint" id="balance-provider-note">可选：选定后可用上面保存的密钥查询余额，不选则不查询。余额接口只有 DeepSeek 官方、opencode Go 与 commandcode 提供，且密钥必须属于所选服务商。</p><div class="testRow"><button id="balance-btn" class="btn ghost" type="button" disabled>查询余额</button><span id="balance-result" class="status" role="status" aria-live="polite"></span></div></div>
++</details>
+ <div class="testRow"><button id="test-btn" class="btn" type="button">测试连接</button><span id="test-result" class="status" role="status" aria-live="polite"></span></div>
+ </div>
+ <p id="privacy" class="fineprint">所有配置与密钥仅保存在当前机器。</p>
+ <div class="footer"><p class="status" id="status" role="status" aria-live="polite">正在读取本机设置…</p><button id="save" class="btn primary" type="submit" disabled>保存</button></div>
+ </form>
++</details>
++<details id="advanced-settings"><summary>高级设置</summary>
++<div class="settingsContents" id="pet-advanced-settings"></div>
++</details>
++</div>
+ </div>
+ </section>
+-<section class="panel" id="panel-chat" role="tabpanel" aria-labelledby="tab-chat">
++<section class="panel" id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden>
+ <div class="pet-chat-host" id="pet-chat-root"></div>
+ </section>
+ </div>
+diff --git a/dsh-pet/src/standalone/settings-page/script/boot.ts b/dsh-pet/src/standalone/settings-page/script/boot.ts
+index fdbe29f..4d484dc 100644
+--- a/dsh-pet/src/standalone/settings-page/script/boot.ts
++++ b/dsh-pet/src/standalone/settings-page/script/boot.ts
+@@ -138,9 +138,31 @@ async function loadAi() {
+   }
+ }
+ 
++function wireSuperdotSettings() {
++  const link = byId('superdot-link');
++  const button = byId('superdot-settings');
++  const status = byId('superdot-status');
++  callApi('GET', '/superdot/state').then((body) => {
++    if (body && body.connected === true) link.hidden = false;
++  }).catch(() => { /* 未联动时维持独立设置页。 */ });
++  button.addEventListener('click', async () => {
++    button.disabled = true;
++    try {
++      const body = await callApi('POST', '/superdot/action', { kind: 'open', target: 'settings' });
++      if (!body || body.ok !== true) throw new Error(body?.message || '未能打开 SuperDot，请从 SuperDot 进入外观设置。');
++      setStatus(status, '');
++    } catch (error) {
++      setStatus(status, error.message, 'error');
++    } finally {
++      button.disabled = false;
++    }
++  });
++}
++
+ function boot() {
+   wireTabs();
+-  selectTab('chat');
++  selectTab(new URLSearchParams(location.search).get('tab') === 'chat' ? 'chat' : 'config');
++  wireSuperdotSettings();
+   // 刷新后地址栏里的令牌已被清掉，此时靠首次访问换来的 HttpOnly cookie 继续；
+   // cookie 也没了的时候，各面板自己的请求会失败并显示重新打开设置的提示。
+   mountProtocolSelect();
+diff --git a/dsh-pet/src/standalone/settings-page/script/core.ts b/dsh-pet/src/standalone/settings-page/script/core.ts
+index 7ed4ef6..9326d07 100644
+--- a/dsh-pet/src/standalone/settings-page/script/core.ts
++++ b/dsh-pet/src/standalone/settings-page/script/core.ts
+@@ -43,7 +43,7 @@ export interface ScriptConsts {
+ export function coreScript(routePath: string, consts: ScriptConsts): string {
+   return `
+ const TOKEN = new URLSearchParams(location.hash.slice(1)).get('token') || '';
+-history.replaceState(null, '', location.pathname);
++history.replaceState(null, '', location.pathname + location.search);
+ const API = ${JSON.stringify(routePath)};
+ const VOICES = ${JSON.stringify(consts.voices)};
+ const DEFAULT_VOICE_ID = ${JSON.stringify(consts.defaultVoice)};
+diff --git a/dsh-pet/src/standalone/settings-page/script/globals.ts b/dsh-pet/src/standalone/settings-page/script/globals.ts
+index 1b8ae6c..e0180bd 100644
+--- a/dsh-pet/src/standalone/settings-page/script/globals.ts
++++ b/dsh-pet/src/standalone/settings-page/script/globals.ts
+@@ -10,7 +10,7 @@
+ export function globalsScript(): string {
+   return `
+ function globalCards() {
+-  return [globalFlagsCard, voiceCard, fontCard, physicsCard, motionCard, modelCard, environmentCard, advancedCard];
++  return [globalFlagsCard, fontCard, physicsCard, motionCard, modelCard, environmentCard, advancedCard];
+ }
+ 
+ function setGlobal(key, value) {
+@@ -23,11 +23,17 @@ function globalFlagsCard() {
+     toggleRow('g-notify', '系统通知', '对话完成、生成失败、权限申请等事件弹出系统通知。', g.notificationsEnabled, (value) => setGlobal('notificationsEnabled', value)),
+     toggleRow('g-notify-focused', '前台聚焦时也提醒', '开着本页、窗口在前台时照样弹通知、照样播报工作状态语音。默认关闭。', g.notifyWhenFocused, (value) => setGlobal('notifyWhenFocused', value)),
+     toggleRow('g-click', '点击音效', '点击宠物时播放内置音效。', g.clickSoundEnabled, (value) => setGlobal('clickSoundEnabled', value)),
++    toggleRow('g-confine', '锁定在当前屏幕', '抛掷与自主漫游只在当前所在的这块屏幕里活动。', g.confineToScreen, (value) => setGlobal('confineToScreen', value)),
++    toggleRow('g-tray', '系统托盘图标', '桌面模式常驻托盘；关掉后只能从任务栏找回。', g.trayEnabled, (value) => setGlobal('trayEnabled', value)),
++  ]);
++}
++
++function chatFlagsCard() {
++  const g = state.globals;
++  return card('表情与动作', null, [
+     toggleRow('g-whisper-image', '碎碎念配图', '碎碎念时允许模型挑一张表情包。', g.whisperImageEnabled, (value) => setGlobal('whisperImageEnabled', value)),
+     toggleRow('g-chat-image', '对话配图', '对话时把表情包清单交给模型按语境选图。', g.chatImageEnabled, (value) => setGlobal('chatImageEnabled', value)),
+     toggleRow('g-chat-anim', '对话动作联动', '对话时让模型挑一个动作当场表演。', g.chatAnimationEnabled, (value) => setGlobal('chatAnimationEnabled', value)),
+-    toggleRow('g-confine', '锁定在当前屏幕', '抛掷与自主漫游只在当前所在的这块屏幕里活动。', g.confineToScreen, (value) => setGlobal('confineToScreen', value)),
+-    toggleRow('g-tray', '系统托盘图标', '桌面模式常驻托盘；关掉后只能从任务栏找回。', g.trayEnabled, (value) => setGlobal('trayEnabled', value)),
+   ]);
+ }
+ 
+@@ -146,7 +152,7 @@ function motionCard() {
+ 
+ function modelCard() {
+   const g = state.globals;
+-  return card('对话上下文', '模型与接入方式在「AI 服务商」页配置；这里只管对话保留多少上下文。', [
++  return card('对话上下文', '设置聊天时记住多少历史，以及每次回复最多配几张图。', [
+     make('div', { class: 'grid2' }, [
+       numberField('g-memory', '对话记忆轮数', g.chatMemoryRounds, (value) => setGlobal('chatMemoryRounds', Math.round(clampNumber(value, 0, 100, 0))), { min: 0, max: 100, step: 1, hint: '0 表示不带历史。' }),
+       numberField('g-image-limit', '配图张数上限', g.chatImageLimit, (value) => setGlobal('chatImageLimit', Math.round(clampNumber(value, 0, 50, 0))), { min: 0, max: 50, step: 1, hint: '0 表示不限制。' }),
+diff --git a/dsh-pet/src/standalone/settings-page/script/pet-card.ts b/dsh-pet/src/standalone/settings-page/script/pet-card.ts
+index 3ee8c77..c0c03b9 100644
+--- a/dsh-pet/src/standalone/settings-page/script/pet-card.ts
++++ b/dsh-pet/src/standalone/settings-page/script/pet-card.ts
+@@ -77,6 +77,63 @@ async function removePet() {
+   renderPetsPanel();
+ }
+ 
++function syncPetSize(size) {
++  const preset = byId('pet-size-presets');
++  if (preset) {
++    for (const button of preset.querySelectorAll('button[data-size]')) {
++      button.setAttribute('aria-pressed', Number(button.dataset.size) === size ? 'true' : 'false');
++    }
++    byId('pet-size-current').textContent = size + ' px';
++  }
++  const precise = byId('pet-size');
++  if (precise && Number(precise.value) !== size) precise.value = String(size);
++}
++
++function petSizePresets(pet) {
++  const presets = [['小', 330], ['中', 462], ['大', 600]];
++  const buttons = presets.map(([label, size]) => make('button', {
++    type: 'button', class: 'btn sizePreset', text: label,
++    'data-size': size, 'aria-pressed': String(size === pet.size),
++    onclick: () => {
++      pet.size = size;
++      syncPetSize(size);
++      markDirty(true);
++    },
++  }));
++  return make('div', { class: 'field' }, [
++    make('span', { id: 'pet-size-label', class: 'fieldLabel', text: '大小' }),
++    make('div', { class: 'row', id: 'pet-size-presets', role: 'group', 'aria-labelledby': 'pet-size-label' }, [
++      ...buttons,
++      make('span', { class: 'fieldHint sizeCurrent', id: 'pet-size-current', text: pet.size + ' px' }),
++    ]),
++  ]);
++}
++
++function petAppearanceCard(pet) {
++  if (!pet) return card('桌宠外观', null, [make('p', { class: 'empty', text: '这组没有桌宠。可在高级设置添加。' })]);
++  if (!pet.position) pet.position = { corner: 'bottom-right', marginX: 40, marginY: 40 };
++  return card('桌宠外观', null, [
++    make('div', { class: 'grid2' }, [
++      selectField('pet-display', '显示桌宠', pet.display, DISPLAYS.map((value) => ({ value: value, label: displayLabel(value) })), (value) => { pet.display = value; }),
++      selectField('pet-corner', '停靠角落', pet.position.corner, CORNERS.map((value) => ({ value: value, label: cornerLabel(value) })), (value) => { pet.position.corner = value; }),
++    ]),
++    petSizePresets(pet),
++    toggleRow('pet-fixed', '固定在原位', '开启后仍可手动拖动。', pet.fixedEnabled === true, (value) => { pet.fixedEnabled = value; }),
++  ]);
++}
++
++function petChatCard(pet) {
++  if (!pet) return null;
++  return card('聊天偏好', null, [
++    toggleRow('pet-whisper', '自动碎碎念', '按周期让模型生成一句话。', pet.whisperEnabled !== false, (value) => { pet.whisperEnabled = value; }),
++    make('div', { class: 'field' }, [
++      make('label', { for: 'pet-persona', text: '人设（可选）' }),
++      personaWrap(pet),
++      make('p', { class: 'fieldHint', text: personaHint() }),
++    ]),
++  ]);
++}
++
+ function petCard() {
+   const list = currentPets();
+   const pet = list[state.petIndex];
+@@ -94,30 +151,20 @@ function petCard() {
+     textField('pet-name', '显示名', pet.name || '', (value) => { pet.name = value; }),
+     textField('pet-id', '标识（id）', pet.id, (value) => { pet.id = value.trim(); }, { disabled: true, hint: '标识决定素材目录与记忆文件，建好之后不能在这里改。' }),
+     make('div', { class: 'grid2' }, [
+-      numberField('pet-size', '画框大小（px）', pet.size, (value) => { pet.size = value; }, { min: 1, step: 1 }),
++      numberField('pet-size', '画框大小（px）', pet.size, (value) => { pet.size = value; syncPetSize(value); }, { min: 1, step: 1 }),
+       textField('pet-size-percent', '占屏宽度（%）', sizePercent, (value) => {
+         if (value.trim() === '') delete pet.sizePercent;
+         else pet.sizePercent = Number(value);
+       }, { hint: '留空表示按 px 显示。' }),
+     ]),
+-    selectField('pet-display', '显示位置', pet.display, DISPLAYS.map((value) => ({ value: value, label: displayLabel(value) })), (value) => { pet.display = value; }, 'web=仅浏览器 / desktop=仅桌面 / both=两者都显示 / none=都不显示'),
+     make('div', { class: 'grid2' }, [
+-      selectField('pet-corner', '停靠角落', pet.position.corner, CORNERS.map((value) => ({ value: value, label: cornerLabel(value) })), (value) => { pet.position.corner = value; }),
+       numberField('pet-margin-x', '水平边距（px）', pet.position.marginX, (value) => { pet.position.marginX = value; }, { step: 1 }),
++      numberField('pet-margin-y', '垂直边距（px）', pet.position.marginY, (value) => { pet.position.marginY = value; }, { step: 1 }),
+     ]),
+-    numberField('pet-margin-y', '垂直边距（px）', pet.position.marginY, (value) => { pet.position.marginY = value; }, { step: 1 }),
+-    toggleRow('pet-balance', '余额功能', '开启后这只宠物会在余额变化时播动画并显示气泡。', pet.balanceEnabled !== false, (value) => { pet.balanceEnabled = value; }),
+-    toggleRow('pet-whisper', '碎碎念', '按周期让模型生成一句话并播放；不需要就关掉，省调用额度。', pet.whisperEnabled !== false, (value) => { pet.whisperEnabled = value; }),
+-    toggleRow('pet-work', '工作状态联动', '跟随会话状态切换动画与气泡，不调用模型。', pet.workStatusEnabled !== false, (value) => { pet.workStatusEnabled = value; }),
+-    toggleRow('pet-fixed', '固定不动', '开启后随机链不再抽转向与移动；手动点播与拖拽照常。', pet.fixedEnabled === true, (value) => { pet.fixedEnabled = value; }),
+-    make('div', { class: 'field' }, [
+-      make('label', { for: 'pet-persona', text: '这只的人设（可选）' }),
+-      personaWrap(pet),
+-      make('p', { class: 'fieldHint', text: personaHint() }),
+-      make('p', { class: 'fieldHint', text: '发给模型的 system = 这段 + 自动追加的名字与时间背景，别在这里重复写。' }),
+-    ]),
++    toggleRow('pet-balance', '余额功能', '余额变化时显示气泡和动画。', pet.balanceEnabled !== false, (value) => { pet.balanceEnabled = value; }),
++    toggleRow('pet-work', '原生工作状态动画', '随会话状态切换动画和原生提示。', pet.workStatusEnabled !== false, (value) => { pet.workStatusEnabled = value; }),
+   ];
+-  return card('宠物', '这里编辑的是 ' + (state.entry === 'main' ? '默认条目' : state.entry) + ' 的实例；改动在点保存后写盘。', children);
++  return card('桌宠与角色包', null, children);
+ }
+ 
+ /** 条目人设提示：占位符里放的就是条目人设正文，这里只说规则。 */
+diff --git a/dsh-pet/src/standalone/settings-page/script/pets.ts b/dsh-pet/src/standalone/settings-page/script/pets.ts
+index 019278f..1b5bafc 100644
+--- a/dsh-pet/src/standalone/settings-page/script/pets.ts
++++ b/dsh-pet/src/standalone/settings-page/script/pets.ts
+@@ -101,16 +101,23 @@ function packNote() {
+ }
+ 
+ function renderPetsPanel() {
+-  const host = byId('pet-cards');
+-  if (!host) return;
+-  host.textContent = '';
++  const pet = currentPet();
++  const appearance = byId('pet-cards');
++  const chat = byId('pet-chat-settings');
++  const advanced = byId('pet-advanced-settings');
++  appearance.replaceChildren(petAppearanceCard(pet));
++  chat.replaceChildren();
++  const chatPrefs = petChatCard(pet);
++  if (chatPrefs) chat.append(chatPrefs);
++  advanced.replaceChildren();
+   const keys = Object.keys(state.pets);
+-  if (keys.length > 1) host.append(entryTabs(keys));
+-  host.append(petCard());
++  if (keys.length > 1) advanced.append(entryTabs(keys));
++  advanced.append(petCard());
+   if (state.entry === 'main') {
+-    for (const builder of globalCards()) host.append(builder());
++    chat.append(chatFlagsCard(), voiceCard());
++    for (const builder of globalCards()) advanced.append(builder());
+   } else {
+-    host.append(packNote());
++    advanced.append(packNote());
+   }
+ }
+ 
+diff --git a/dsh-pet/src/standalone/settings-page/style.ts b/dsh-pet/src/standalone/settings-page/style.ts
+index d9525f2..2b938b7 100644
+--- a/dsh-pet/src/standalone/settings-page/style.ts
++++ b/dsh-pet/src/standalone/settings-page/style.ts
+@@ -68,6 +68,14 @@ a{color:var(--dsw-static-blue-500)}
+ .options{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0}
+ .panel{display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden}
+ .scroll{flex:1;min-height:0;overflow-y:auto;padding:22px 30px 4px}
++.settingsMore{border-top:1px solid var(--dsw-alias-border-l2);margin-top:16px;padding-top:6px}
++.settingsMore>details>summary,.modelBalance>summary{cursor:pointer;padding:12px 0;color:var(--dsw-alias-label-primary);font-weight:600}
++.settingsMore summary:focus-visible{outline:2px solid var(--dsw-static-blue-500);outline-offset:2px}
++.settingsContents{padding-top:6px}
++.petSave{margin-top:-2px;border-top:0}
++.superdotLink{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
++.sizePreset[aria-pressed=true]{background:var(--dsw-specific-sidebar-nav-item-active);border-color:var(--dsw-static-blue-500)}
++.sizeCurrent{margin:0}
+ .scroll>*{width:100%;max-width:var(--dsh-content-width);margin-left:auto;margin-right:auto}
+ /* 对话面板自己管内边距与滚动，这里只负责给它一个确定高度的容器；宽度与配置页对齐。 */
+ .pet-chat-host{display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;width:100%;max-width:var(--dsh-content-width);margin-left:auto;margin-right:auto}
