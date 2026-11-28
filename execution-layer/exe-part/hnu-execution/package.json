@@ -1,0 +1,30 @@
+{
+  "name": "hnu-execution",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HNU super agent 执行层：Router/Worker 编排、工单存储、通知与消息层/DSH 适配。",
+  "scripts": {
+    "test": "node --test --experimental-strip-types 'test/*.test.ts'"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-persistence": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1"
+  },
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm-deepseek-api-key": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-fs": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-fs-search": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tool-present": "0.2.2-rc.1"
+  }
+}
